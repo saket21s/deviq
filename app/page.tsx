@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, CSSProperties, ReactNode } from "react";
 
-const API = "http://localhost:8000";
+const API = "https://developer-portfolio-backend-bu76.onrender.com";
 
 /* ═══════════════════════════════════════════════════
    TYPES
