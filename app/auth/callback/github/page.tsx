@@ -1,18 +1,8 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 
-/**
- * GitHub OAuth Callback  →  app/auth/callback/github/page.tsx
- *
- * After GitHub redirects here, exchange the `code` for a token via your
- * backend, then post the user data back to the opener window and close.
- *
- * Backend endpoint expected:  POST /api/auth/github
- *   Body:   { code }
- *   Returns: { name, email, avatar, login }
- */
-export default function GitHubCallback() {
+function GitHubCallbackInner() {
   const params = useSearchParams();
   const ran = useRef(false);
 
@@ -46,7 +36,6 @@ export default function GitHubCallback() {
 
     sessionStorage.removeItem("oauth_state");
 
-    // Exchange code for user info via your backend
     fetch("/api/auth/github", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -77,5 +66,21 @@ export default function GitHubCallback() {
       </div>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
+  );
+}
+
+export default function GitHubCallback() {
+  return (
+    <Suspense fallback={
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", fontFamily: "system-ui, sans-serif", color: "#666" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ width: 32, height: 32, border: "3px solid #E5E5E5", borderTopColor: "#24292e", borderRadius: "50%", margin: "0 auto 16px", animation: "spin 0.8s linear infinite" }} />
+          <p style={{ fontSize: 14 }}>Completing GitHub sign-in…</p>
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    }>
+      <GitHubCallbackInner />
+    </Suspense>
   );
 }
