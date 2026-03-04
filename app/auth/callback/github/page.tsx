@@ -2,6 +2,8 @@
 import { Suspense, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 
+export const dynamic = "force-dynamic";
+
 function GitHubCallbackInner() {
   const params = useSearchParams();
   const ran = useRef(false);
