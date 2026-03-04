@@ -1,22 +1,18 @@
 "use client";
 
-import { Suspense, useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 
 export const dynamic = "force-dynamic";
-export const fetchCache = "force-no-store";
 
-function GitHubCallbackInner() {
+export default function GitHubCallback() {
   const params = useSearchParams();
-  const ran = useRef(false);
 
   useEffect(() => {
-    if (ran.current) return;
-    ran.current = true;
-
     const code = params.get("code");
     const state = params.get("state");
     const error = params.get("error");
+
     const storedState = sessionStorage.getItem("oauth_state");
 
     if (error) {
@@ -57,12 +53,10 @@ function GitHubCallbackInner() {
     })
       .then((r) => r.json())
       .then((data) => {
-        if (data.error) throw new Error(data.error);
-
         window.opener?.postMessage(
           {
             type: "OAUTH_SUCCESS",
-            name: data.name || data.login || "GitHub User",
+            name: data.name,
             email: data.email,
             avatar: data.avatar,
             provider: "github",
@@ -77,7 +71,7 @@ function GitHubCallbackInner() {
         );
       })
       .finally(() => window.close());
-  }, []);
+  }, [params]);
 
   return (
     <div
@@ -85,56 +79,11 @@ function GitHubCallbackInner() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        minHeight: "100vh",
-        fontFamily: "system-ui, sans-serif",
-        color: "#666",
+        height: "100vh",
+        fontFamily: "system-ui",
       }}
     >
-      <div style={{ textAlign: "center" }}>
-        <div
-          style={{
-            width: 32,
-            height: 32,
-            border: "3px solid #E5E5E5",
-            borderTopColor: "#24292e",
-            borderRadius: "50%",
-            margin: "0 auto 16px",
-            animation: "spin 0.8s linear infinite",
-          }}
-        />
-        <p style={{ fontSize: 14 }}>Completing GitHub sign-in…</p>
-      </div>
-
-      <style>
-        {`
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-        `}
-      </style>
+      Completing GitHub sign-in...
     </div>
-  );
-}
-
-export default function GitHubCallback() {
-  return (
-    <Suspense
-      fallback={
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            minHeight: "100vh",
-            fontFamily: "system-ui, sans-serif",
-            color: "#666",
-          }}
-        >
-          <p style={{ fontSize: 14 }}>Loading…</p>
-        </div>
-      }
-    >
-      <GitHubCallbackInner />
-    </Suspense>
   );
 }
