@@ -1,18 +1,16 @@
 "use client";
-
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-export default function GitHubCallback() {
+function GitHubCallbackInner() {
   const params = useSearchParams();
 
   useEffect(() => {
     const code = params.get("code");
     const state = params.get("state");
     const error = params.get("error");
-
     const storedState = sessionStorage.getItem("oauth_state");
 
     if (error) {
@@ -23,7 +21,6 @@ export default function GitHubCallback() {
       window.close();
       return;
     }
-
     if (!code) {
       window.opener?.postMessage(
         { type: "OAUTH_ERROR", message: "No authorization code received." },
@@ -32,7 +29,6 @@ export default function GitHubCallback() {
       window.close();
       return;
     }
-
     if (state !== storedState) {
       window.opener?.postMessage(
         { type: "OAUTH_ERROR", message: "State mismatch." },
@@ -46,9 +42,7 @@ export default function GitHubCallback() {
 
     fetch("/api/auth/github", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
     })
       .then((r) => r.json())
@@ -85,5 +79,27 @@ export default function GitHubCallback() {
     >
       Completing GitHub sign-in...
     </div>
+  );
+}
+
+export default function GitHubCallback() {
+  return (
+    <Suspense
+      fallback={
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "100vh",
+            fontFamily: "system-ui",
+          }}
+        >
+          Loading...
+        </div>
+      }
+    >
+      <GitHubCallbackInner />
+    </Suspense>
   );
 }
