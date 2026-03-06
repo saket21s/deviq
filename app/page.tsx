@@ -3118,12 +3118,24 @@ export default function Page() {
       location: latestProfile.location,
       recentAnalyses: latestProfile.recentAnalyses?.length || 0
     });
+    console.log('📥 Current profile state:', {
+      bio: profile?.bio,
+      displayName: profile?.displayName,
+      website: profile?.website,
+      location: profile?.location,
+      recentAnalyses: profile?.recentAnalyses?.length || 0
+    });
     if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
     if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
     if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
     setProfile(latestProfile);
     saveProfile(user.email, latestProfile);
-    console.log('✅ Profile state updated');
+    console.log('✅ Profile state updated to:', {
+      bio: latestProfile.bio,
+      displayName: latestProfile.displayName,
+      website: latestProfile.website,
+      location: latestProfile.location
+    });
   };
   const handleDeleteAccount = async () => { if (!user) return; try { await serverRequest('/auth/account', { method: 'DELETE' }); } catch { /* ignore */ } deleteAccount(user.email); setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home"); };
   const toggleDark = () => { setDark(d => { localStorage.setItem("deviq_dark", d ? "0" : "1"); return !d; }); };
