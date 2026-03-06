@@ -1,7 +1,11 @@
 "use client";
 import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
 
-const API = "https://developer-portfolio-backend-bu76.onrender.com";
+// base URL for the backend service; you can run the Python/FastAPI server locally
+// and point at it by setting NEXT_PUBLIC_API_BASE_URL (eg. http://localhost:8000).
+// the remote render.com host also provides the same endpoints, so the default
+// is the public API used for analysis and user persistence.
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || "https://developer-portfolio-backend-bu76.onrender.com";
 const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
 const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
@@ -157,6 +161,70 @@ function clearSession() { localStorage.removeItem(SESSION_KEY); }
 function loadProfile(email: string): UserProfile { try { const raw = localStorage.getItem(`${PROFILE_KEY}_${email}`); if (raw) return JSON.parse(raw); } catch { } return { displayName: "", bio: "", website: "", location: "", joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }; }
 function saveProfile(email: string, p: UserProfile) { localStorage.setItem(`${PROFILE_KEY}_${email}`, JSON.stringify(p)); }
 function deleteAccount(email: string) { const users = getUsers().filter(u => u.email.toLowerCase() !== email.toLowerCase()); localStorage.setItem(USERS_KEY, JSON.stringify(users)); clearSession(); localStorage.removeItem(`${PROFILE_KEY}_${email}`); }
+
+// -----------------------------------------------------------------------------
+// Server API helpers (credentials included) and optional local-storage fallback
+// -----------------------------------------------------------------------------
+async function serverRequest(path: string, opts: RequestInit = {}) {
+  opts.credentials = "include";
+  const res = await fetch(`${API}${path}`, opts);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+  return res.json();
+}
+
+async function apiSignup(name: string, email: string, password: string, avatar?: string, provider?: string): Promise<AuthUser> {
+  return serverRequest('/auth/signup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, email, password, avatar, provider }),
+  });
+}
+
+async function apiLogin(email: string, password: string): Promise<AuthUser> {
+  return serverRequest('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+async function apiOAuth(user: { name: string; email: string; avatar?: string; provider?: string; }): Promise<AuthUser> {
+  return serverRequest('/auth/oauth', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(user),
+  });
+}
+
+async function apiFetchSession(): Promise<AuthUser | null> {
+  try {
+    return await serverRequest('/auth/me');
+  } catch {
+    return null;
+  }
+}
+
+async function apiLogout(): Promise<void> {
+  try {
+    await serverRequest('/auth/logout', { method: 'POST' });
+  } catch { }
+}
+
+async function apiGetProfile(): Promise<UserProfile> {
+  return serverRequest('/profile');
+}
+
+async function apiSaveProfile(p: UserProfile): Promise<UserProfile> {
+  return serverRequest('/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p),
+  });
+}
+
 function pwStrength(pw: string): number {
   if (!pw) return 0; let s = 0;
   if (pw.length >= 8) s++; if (pw.length >= 12) s++;
@@ -1012,9 +1080,17 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "OAUTH_SUCCESS") {
         const { name: n, email: e, avatar, provider } = event.data;
-        saveUser({ name: n, email: e, password: "__oauth__", avatar, provider });
-        setSuccess(true);
-        setTimeout(() => onAuth({ name: n, email: e, avatar, provider }), 500);
+        // persist on backend and then notify host
+        apiOAuth({ name: n, email: e, avatar, provider })
+          .then(u => {
+            setSuccess(true);
+            setOauthLoading(null);
+            setTimeout(() => onAuth(u), 500);
+          })
+          .catch(err => {
+            setGlobalError(err.message || "OAuth failed.");
+            setOauthLoading(null);
+          });
       }
       if (event.data?.type === "OAUTH_ERROR") { setGlobalError(event.data.message || "OAuth failed."); setOauthLoading(null); }
     };
@@ -1038,18 +1114,29 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
     if (isLogin) {
       if (!email || !password || !EMAIL_RE.test(email) || password.length < 6) return;
       setGlobalError(""); setSubmitting(true);
-      setTimeout(() => {
-        const found = findUser(email, password);
-        if (!found) { setSubmitting(false); setGlobalError("Incorrect email or password."); return; }
-        setSuccess(true); setTimeout(() => onAuth({ name: found.name, email: found.email, avatar: found.avatar, provider: (found.provider as AuthUser["provider"]) || "email" }), 600);
-      }, 700);
+      apiLogin(email, password)
+        .then(u => {
+          setSuccess(true);
+          setTimeout(() => onAuth(u), 600);
+        })
+        .catch(err => {
+          setGlobalError(err.message || "Incorrect email or password.");
+          setSubmitting(false);
+        });
     } else {
       if (!name.trim() || !email || !password || !confirm) return;
       if (!EMAIL_RE.test(email) || password.length < 8 || !/[A-Z]/.test(password) || !/[0-9]/.test(password) || confirm !== password) return;
       if (!agreed) { setGlobalError("Please accept the Terms of Service."); return; }
-      if (emailExists(email)) { setGlobalError("An account with this email already exists."); return; }
       setGlobalError(""); setSubmitting(true);
-      setTimeout(() => { saveUser({ name: name.trim(), email: email.toLowerCase(), password, provider: "email" }); setSuccess(true); setTimeout(() => onAuth({ name: name.trim(), email: email.toLowerCase(), provider: "email" }), 600); }, 800);
+      apiSignup(name.trim(), email.toLowerCase(), password)
+        .then(u => {
+          setSuccess(true);
+          setTimeout(() => onAuth(u), 600);
+        })
+        .catch(err => {
+          setGlobalError(err.message || "An account with this email already exists.");
+          setSubmitting(false);
+        });
     }
   };
 
@@ -2342,40 +2429,82 @@ export default function Page() {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    try {
-      const storedDark = localStorage.getItem("deviq_dark");
-      if (storedDark !== null) setDark(storedDark === "1");
-      else setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
-      const savedUser = loadSession();
-      if (savedUser) {
-        setUser(savedUser);
-        const p = loadProfile(savedUser.email);
-        if (!p.displayName) p.displayName = savedUser.name;
-        if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-        saveProfile(savedUser.email, p); setProfile(p);
+    const init = async () => {
+      try {
+        const storedDark = localStorage.getItem("deviq_dark");
+        if (storedDark !== null) setDark(storedDark === "1");
+        else setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+
+        // try server session first
+        const serverUser = await apiFetchSession();
+        if (serverUser) {
+          setUser(serverUser);
+          try {
+            const p = await apiGetProfile();
+            if (!p.displayName) p.displayName = serverUser.name;
+            if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+            setProfile(p);
+          } catch { /* ignore */ }
+        } else {
+          // fallback to local storage
+          const savedUser = loadSession();
+          if (savedUser) {
+            setUser(savedUser);
+            const p = loadProfile(savedUser.email);
+            if (!p.displayName) p.displayName = savedUser.name;
+            if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+            saveProfile(savedUser.email, p); setProfile(p);
+          }
+        }
+      } catch {
+        // ignore errors during init
       }
-    } catch { }
-    setHydrated(true);
-    const pathPage = window.location.pathname.replace("/", "") as Page;
-    const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following"];
-    const initialPage = validPages.includes(pathPage) ? pathPage : "home";
-    setPage(initialPage);
-    window.history.replaceState({ page: initialPage }, "", initialPage === "home" ? "/" : `/${initialPage}`);
+      setHydrated(true);
+      const pathPage = window.location.pathname.replace("/", "") as Page;
+      const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following"];
+      const initialPage = validPages.includes(pathPage) ? pathPage : "home";
+      setPage(initialPage);
+      window.history.replaceState({ page: initialPage }, "", initialPage === "home" ? "/" : `/${initialPage}`);
+    };
+    init();
   }, []);
 
-  const handleLogin = (u: AuthUser) => {
-    setUser(u); saveSession(u);
-    const p = loadProfile(u.email);
-    if (!p.displayName) p.displayName = u.name;
-    if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-    saveProfile(u.email, p); setProfile(p); setAuthModal(null); setMenuOpen(false);
+  const handleLogin = async (u: AuthUser) => {
+    setUser(u);
+    // store locally in case of offline fallback
+    saveSession(u);
+    try {
+      const p = await apiGetProfile();
+      if (!p.displayName) p.displayName = u.name;
+      if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+      setProfile(p);
+    } catch {
+      // fallback to local profile store
+      const p = loadProfile(u.email);
+      if (!p.displayName) p.displayName = u.name;
+      if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+      saveProfile(u.email, p); setProfile(p);
+    }
+    setAuthModal(null); setMenuOpen(false);
   };
-  const handleLogout = () => { clearSession(); setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home"); };
-  const handleProfileSave = (updated: UserProfile) => {
-    if (!user) return; saveProfile(user.email, updated); setProfile(updated);
+  const handleLogout = async () => { 
+    await apiLogout().catch(() => {});
+    clearSession();
+    setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home");
+  };
+  const handleProfileSave = async (updated: UserProfile) => {
+    if (!user) return;
+    try {
+      const saved = await apiSaveProfile(updated);
+      setProfile(saved);
+    } catch {
+      // fallback
+      saveProfile(user.email, updated);
+      setProfile(updated);
+    }
     if (updated.displayName && updated.displayName !== user.name) { const u2 = { ...user, name: updated.displayName }; setUser(u2); saveSession(u2); }
   };
-  const handleDeleteAccount = () => { if (!user) return; deleteAccount(user.email); setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home"); };
+  const handleDeleteAccount = async () => { if (!user) return; try { await serverRequest('/auth/account', { method: 'DELETE' }); } catch { /* ignore */ } deleteAccount(user.email); setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home"); };
   const toggleDark = () => { setDark(d => { localStorage.setItem("deviq_dark", d ? "0" : "1"); return !d; }); };
 
   const tk = dark ? THEMES.dark : THEMES.light;
@@ -2607,7 +2736,7 @@ export default function Page() {
         {authModal && <AuthModal mode={authModal} tk={tk} onAuth={handleLogin} onClose={() => setAuthModal(null)} onSwitchMode={() => setAuthModal(m => m === "login" ? "signup" : "login")} />}
 
         {/* NAVBAR */}
-        <nav suppressHydrationWarning style={{ position: "sticky", top: 0, zIndex: 200, background: dark ? "rgba(10,10,10,0.92)" : "rgba(245,245,245,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderBottom: `1px solid ${tk.border}` }}>
+        <nav suppressHydrationWarning style={{ position: "sticky", top: 0, zIndex: 200, background: dark ? "rgba(10,10,10,0.92)" : "rgba(245,245,245,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderBottom: `1px solid ${tk.border}`, overflow: "visible" }}>
           <div style={{ maxWidth: 1100, margin: "0 auto", padding: `0 ${px}`, display: "flex", alignItems: "center", justifyContent: "space-between", height: 58 }}>
             <button onClick={() => navigate("home")} style={{ fontSize: 14, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>DevIQ</button>
             {!isMobile && (
@@ -2639,7 +2768,8 @@ export default function Page() {
               {!isMobile && user && (
                 <div style={{ position: "relative" }}>
                   <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
-                    {user.avatar ? <img src={user.avatar} alt={user.name} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 24, height: 24, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div>}
+                    {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
+                    <div style={{ width: 24, height: 24, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div>
                     <span style={{ fontSize: 12, fontWeight: 500, color: tk.text, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name}</span>
                     <svg width={10} height={10} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </button>
@@ -2647,7 +2777,8 @@ export default function Page() {
                     <div className="slide-down" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 9, boxShadow: tk.shadowMd, minWidth: 180, overflow: "hidden", zIndex: 300 }}>
                       <div style={{ padding: "12px 14px 10px", borderBottom: `1px solid ${tk.border}` }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                          {user.avatar ? <img src={user.avatar} alt={user.name} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} /> : <div style={{ width: 28, height: 28, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{user.name[0].toUpperCase()}</div>}
+                          {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} /> : null}
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{user.name[0].toUpperCase()}</div>
                           <div><div style={{ fontSize: 12, fontWeight: 600, color: tk.text }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}</div>
                         </div>
                         <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
@@ -2672,10 +2803,34 @@ export default function Page() {
                 </div>
               )}
               {isMobile && user && (
-                <button onClick={() => setMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 3px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
-                  {user.avatar ? <img src={user.avatar} alt={user.name} style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 22, height: 22, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div>}
-                  <svg width={9} height={9} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
-                </button>
+                <div style={{ position: "relative" }}>
+                  <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 3px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
+                    {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
+                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div>
+                    <svg width={9} height={9} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                  </button>
+                  {userMenuOpen && (
+                    <div className="slide-down" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 9, boxShadow: tk.shadowMd, minWidth: 160, overflow: "hidden", zIndex: 400 }}>
+                      <div style={{ padding: "12px 14px 10px", borderBottom: `1px solid ${tk.border}` }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                          {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} /> : null}
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{user.name[0].toUpperCase()}</div>
+                          <div><div style={{ fontSize: 12, fontWeight: 600, color: tk.text }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}</div>
+                        </div>
+                        <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
+                      </div>
+                      {[{ label: "Profile", action: () => { navigate("profile"); setUserMenuOpen(false); } }, { label: "Following", action: () => { navigate("following"); setUserMenuOpen(false); } }, { label: "History", action: () => { navigate("history"); setUserMenuOpen(false); } }, { label: "Practice", action: () => { navigate("practice"); setUserMenuOpen(false); } }, { label: "Chat", action: () => { navigate("chat"); setUserMenuOpen(false); } }, { label: "Settings", action: () => { navigate("settings"); setUserMenuOpen(false); } }].map(item => (
+                        <button key={item.label} onClick={item.action} style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: tk.text2, fontFamily: "inherit", transition: "background 0.12s" }}
+                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.bgAlt}
+                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>{item.label}</button>
+                      ))}
+                      <div style={{ height: 1, background: tk.border }} />
+                      <button onClick={() => { handleLogout(); setUserMenuOpen(false); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: tk.rose, fontFamily: "inherit" }}
+                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.roseLight}
+                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>Sign out</button>
+                    </div>
+                  )}
+                </div>
               )}
               {user && profile && (
                 <button onClick={() => navigate("following")} style={{ position: "relative", width: 32, height: 32, borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: tk.text2 }}>
@@ -2689,38 +2844,32 @@ export default function Page() {
               )}
               <button onClick={toggleDark} style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", color: tk.text2 }}>{dark ? "○" : "●"}</button>
               {isMobile && (
-                <button onClick={() => setMenuOpen(o => !o)} style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, padding: 0 }} aria-label="Menu">
-                  <span style={{ display: "block", width: 14, height: 1.5, borderRadius: 2, background: tk.text2, transition: "all 0.2s", transform: menuOpen ? "rotate(45deg) translate(0px, 3px)" : "none" }} />
-                  <span style={{ display: "block", width: 14, height: 1.5, borderRadius: 2, background: tk.text2, transition: "all 0.2s", opacity: menuOpen ? 0 : 1 }} />
-                  <span style={{ display: "block", width: 14, height: 1.5, borderRadius: 2, background: tk.text2, transition: "all 0.2s", transform: menuOpen ? "rotate(-45deg) translate(0px, -3px)" : "none" }} />
+                <button onClick={() => setMenuOpen(o => !o)} style={{ width: 44, height: 44, borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, padding: 0 }} aria-label="Menu">
+                  <span style={{ display: "block", width: 18, height: 2, borderRadius: 1, background: tk.text2, transition: "all 0.2s", transform: menuOpen ? "rotate(45deg) translate(0px, 4px)" : "none" }} />
+                  <span style={{ display: "block", width: 18, height: 2, borderRadius: 1, background: tk.text2, transition: "all 0.2s", opacity: menuOpen ? 0 : 1 }} />
+                  <span style={{ display: "block", width: 18, height: 2, borderRadius: 1, background: tk.text2, transition: "all 0.2s", transform: menuOpen ? "rotate(-45deg) translate(0px, -4px)" : "none" }} />
                 </button>
               )}
             </div>
           </div>
-          {isMobile && menuOpen && (
-            <div className="slide-down" style={{ borderTop: `1px solid ${tk.border}`, background: dark ? "rgba(10,10,10,0.98)" : "rgba(245,245,245,0.98)", paddingBottom: 8 }}>
-              {user && (<div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>{user.avatar ? <img src={user.avatar} alt={user.name} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 32, height: 32, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div>}<div><div style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>{user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>{user.email}</div></div></div>)}
+        </nav>
+
+        {/* MOBILE MENU - OUTSIDE NAV FOR BETTER POSITIONING */}
+        {isMobile && menuOpen && (
+          <div className="slide-down" style={{ borderTop: `1px solid ${tk.border}`, background: dark ? "rgba(10,10,10,0.98)" : "rgba(245,245,245,0.98)", paddingBottom: 8, position: "fixed", top: 58, left: 0, right: 0, zIndex: 300, maxHeight: "calc(100vh - 58px)", overflowY: "auto" as const }} onClick={e => e.stopPropagation()}>
+              {user && (<div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>{user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}<div style={{ width: 32, height: 32, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div><div><div style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>{user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>{user.email}</div></div></div>)}
               {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }] as { id: Page; label: string }[]).map(item => (
-                <button key={item.id} onClick={() => navigate(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", textAlign: "left", padding: "11px 20px", border: "none", borderBottom: `1px solid ${tk.border}`, background: page === item.id ? tk.bgAlt : "transparent", cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 400, color: page === item.id ? tk.text : tk.text2 }}>
+                <button key={item.id} onClick={() => navigate(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", textAlign: "left", padding: "16px 20px", border: "none", borderBottom: `1px solid ${tk.border}`, background: page === item.id ? tk.bgAlt : "transparent", cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 400, color: page === item.id ? tk.text : tk.text2, fontFamily: "inherit" }}>
                   {item.label}{page === item.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: tk.blue, flexShrink: 0 }} />}
                 </button>
               ))}
-              {user && (<>
-                <div style={{ padding: "8px 20px 4px" }}><span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: tk.text3 }}>Account</span></div>
-                {([{ id: "profile" as const, label: "Profile" }, { id: "settings" as const, label: "Settings" }] as { id: Page; label: string }[]).map(item => (
-                  <button key={item.id} onClick={() => navigate(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", textAlign: "left", padding: "11px 20px", border: "none", borderBottom: `1px solid ${tk.border}`, background: page === item.id ? tk.bgAlt : "transparent", cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 400, color: page === item.id ? tk.text : tk.text2, fontFamily: "inherit" }}>
-                    {item.label}{page === item.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: tk.blue, flexShrink: 0 }} />}
-                  </button>
-                ))}
-              </>)}
               {navLinks.length > 0 && (<>
                 <div style={{ padding: "8px 20px 4px" }}><span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: tk.text3 }}>Sections</span></div>
-                {navLinks.map(l => (<button key={l.id} onClick={() => scroll(l.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 20px 9px 28px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 400, color: tk.text2 }}>{l.label}</button>))}
+                {navLinks.map(l => (<button key={l.id} onClick={() => scroll(l.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "14px 20px 14px 28px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 400, color: tk.text2, fontFamily: "inherit" }}>{l.label}</button>))}
               </>)}
-              {user && (<div style={{ padding: "10px 16px 6px" }}><button onClick={handleLogout} style={{ width: "100%", padding: "11px", borderRadius: 7, border: `1px solid ${tk.roseBorder}`, background: tk.roseLight, cursor: "pointer", fontSize: 14, fontWeight: 500, color: tk.rose, fontFamily: "inherit" }}>Sign out</button></div>)}
-            </div>
-          )}
-        </nav>
+              {user && (<div style={{ padding: "10px 16px 6px" }}><button onClick={handleLogout} style={{ width: "100%", padding: "16px", borderRadius: 7, border: `1px solid ${tk.roseBorder}`, background: tk.roseLight, cursor: "pointer", fontSize: 14, fontWeight: 500, color: tk.rose, fontFamily: "inherit" }}>Sign out</button></div>)}
+          </div>
+        )}
 
         {/* PAGES */}
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: `0 ${px} 80px` }}>
