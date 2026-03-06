@@ -37,6 +37,21 @@ function GitHubCallbackInner() {
       localStorage.removeItem("github_connect_state");
       localStorage.removeItem("github_connect_action");
       
+      // Step 1: Get the token from localStorage
+      console.log('📝 Getting auth token from localStorage...');
+      const authToken = localStorage.getItem("auth_token");
+      
+      if (!authToken) {
+        console.error('❌ No auth token found');
+        window.opener?.postMessage(
+          { type: "OAUTH_ERROR", message: "Authentication required" },
+          window.location.origin
+        );
+        window.close();
+        return;
+      }
+
+      // Step 2: Exchange code for user data
       fetch("/api/auth/github", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -51,14 +66,20 @@ function GitHubCallbackInner() {
         })
         .then(async (data) => {
           // Connect the GitHub account
-          const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+          const BACKEND = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+            ? 'http://localhost:8000'
+            : (process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com');
+          
+          console.log('🔌 Connecting GitHub account to backend:', { BACKEND, username: data.login });
+          
           const connectResp = await fetch(`${BACKEND}/accounts/connect/github`, {
             method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
+            headers: { 
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${authToken}`
+            },
             body: JSON.stringify({ 
               username: data.login || data.name,
-              access_token: data.access_token,
               metadata: { 
                 name: data.name,
                 email: data.email,
@@ -67,16 +88,20 @@ function GitHubCallbackInner() {
             })
           });
           
+          const connectData = await connectResp.json();
+          
           if (connectResp.ok) {
+            console.log('✅ GitHub account connected successfully');
             window.opener?.postMessage(
               { type: "GITHUB_CONNECTED", username: data.login || data.name },
               window.location.origin
             );
           } else {
-            throw new Error("Failed to connect GitHub account");
+            throw new Error(connectData.detail || connectData.error || "Failed to connect GitHub account");
           }
         })
         .catch((err) => {
+          console.error('❌ Error connecting GitHub account to backend:', err);
           window.opener?.postMessage(
             { type: "OAUTH_ERROR", message: err.message },
             window.location.origin

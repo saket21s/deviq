@@ -195,7 +195,13 @@ function loadProfile(email: string): UserProfile {
 function saveProfile(email: string, p: UserProfile) {
   localStorage.setItem(`${PROFILE_KEY}_${email}`, JSON.stringify(normalizeUserProfile(p)));
 }
-function deleteAccount(email: string) { const users = getUsers().filter(u => u.email.toLowerCase() !== email.toLowerCase()); localStorage.setItem(USERS_KEY, JSON.stringify(users)); clearSession(); localStorage.removeItem(`${PROFILE_KEY}_${email}`); }
+function deleteAccount(email: string) {
+  const users = getUsers().filter(u => u.email.toLowerCase() !== email.toLowerCase());
+  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  clearSession();
+  localStorage.removeItem(`${PROFILE_KEY}_${email}`);
+  localStorage.removeItem("auth_token");
+}
 
 function normalizeProvider(provider?: string): "google" | "github" | "email" | undefined {
   const p = (provider || "").toLowerCase();
@@ -353,6 +359,11 @@ async function apiLogin(email: string, password: string): Promise<AuthUser> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
+    // Store auth token in localStorage for use in popups
+    if ((remote as any)?.access_token) {
+      localStorage.setItem("auth_token", (remote as any).access_token);
+      console.log('✅ Auth token stored in localStorage');
+    }
     const merged = enrichAuthUser(coerceAuthUser(remote, { email, provider: "email" }));
     cacheAuthUser(merged);
     return merged;
@@ -383,6 +394,11 @@ async function apiOAuth(user: { name: string; email: string; avatar?: string; pr
         },
       }),
     });
+    // Store auth token in localStorage for use in popups
+    if ((remote as any)?.access_token) {
+      localStorage.setItem("auth_token", (remote as any).access_token);
+      console.log('✅ Auth token stored in localStorage');
+    }
     const merged = enrichAuthUser(coerceAuthUser(remote, { ...user, provider: normalizeProvider(user.provider) }));
     cacheAuthUser(merged);
     return merged;
@@ -424,6 +440,12 @@ async function apiGmailLogin(user?: { name?: string; email?: string; avatar?: st
       payload = null;
     }
     if (!payload) return null;
+    // Store auth token in localStorage for use in popups
+    if (payload?.access_token) {
+      localStorage.setItem("auth_token", payload.access_token);
+      console.log('✅ Auth token stored in localStorage');
+    }
+
 
     const normalized = enrichAuthUser(coerceAuthUser(payload, { provider: "google", email }));
 
@@ -464,6 +486,9 @@ async function apiLogout(): Promise<void> {
   try {
     await serverRequest('/auth/logout', { method: 'POST' });
   } catch { }
+  // Clear auth token from localStorage
+  localStorage.removeItem("auth_token");
+  console.log('✅ Auth token cleared from localStorage');
 }
 
 async function apiSaveProfilePicture(pictureUrl?: string): Promise<void> {
@@ -3667,6 +3692,7 @@ export default function Page() {
   // Listen for GitHub OAuth connection success
   useEffect(() => {
     const handleGitHubConnected = async (event: MessageEvent) => {
+      console.log('📨 Received message from GitHub callback:', event.data);
       if (event.data?.type === 'GITHUB_CONNECTED') {
         console.log('✅ GitHub account connected successfully');
         setAccountSaveMessage({ text: '✓ GitHub account connected', type: 'success' });
@@ -3696,14 +3722,15 @@ export default function Page() {
       setTimeout(() => setAccountSaveMessage(null), 3000);
       return;
     }
-
     setConnectingPlatform(platform);
     setAccountSaveMessage(null);
 
     try {
       if (platform === 'github') {
         // Use GitHub OAuth
+        console.log('🔗 Starting GitHub OAuth flow...');
         if (!GITHUB_CLIENT_ID) {
+          console.error('❌ GitHub OAuth not configured - missing GITHUB_CLIENT_ID');
           setAccountSaveMessage({ text: 'GitHub OAuth is not configured', type: 'error' });
           setTimeout(() => setAccountSaveMessage(null), 3000);
           setConnectingPlatform(null);
@@ -3714,11 +3741,15 @@ export default function Page() {
         localStorage.setItem('github_connect_action', 'connect_account');
         const redirectUri = `${window.location.origin}/auth/callback/github`;
         const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email%20read:user&state=${state}`;
+        console.log('🔓 Opening GitHub OAuth popup with URL:', githubAuthUrl.split('&state=')[0] + '&state=...');
         const popup = window.open(githubAuthUrl, 'GitHub Login', 'width=600,height=700');
         if (!popup) {
+          console.error('❌ Failed to open GitHub login popup');
           setAccountSaveMessage({ text: 'Failed to open GitHub login popup. Check if popups are allowed.', type: 'error' });
           setTimeout(() => setAccountSaveMessage(null), 3000);
           setConnectingPlatform(null);
+        } else {
+          console.log('✅ GitHub OAuth popup opened successfully');
         }
         return;
       }
