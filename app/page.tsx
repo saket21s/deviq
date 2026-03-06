@@ -2690,9 +2690,10 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
 /* ─────────────────────────────────────────────────
    SETTINGS PAGE
 ───────────────────────────────────────────────── */
-function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogout, onDeleteAccount, onProfileSave }: {
+function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogout, onDeleteAccount, onProfileSave, onSyncNow, onPullLatest }: {
   user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean; dark: boolean;
   onDarkToggle: () => void; onLogout: () => void; onDeleteAccount: () => void; onProfileSave: (p: UserProfile) => void;
+  onSyncNow: () => Promise<void>; onPullLatest: () => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<"account" | "appearance" | "notifications" | "privacy">("account");
   const p = profile;
@@ -2702,6 +2703,9 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const [location, setLocation] = useState(p?.location || "");
   const [saved, setSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [pulling, setPulling] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<{text: string; type: 'success' | 'error'} | null>(null);
 
   useEffect(() => {
     setDisplayName(p?.displayName || user.name);
@@ -2718,6 +2722,41 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const handleSaveAccount = () => {
     const updated: UserProfile = { ...(p || { joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }), displayName: displayName.trim() || user.name, bio: bio.trim(), website: website.trim(), location: location.trim() };
     onProfileSave(updated); setSaved(true); setTimeout(() => setSaved(false), 2500);
+  };
+
+  const handleManualSync = async () => {
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      await onSyncNow();
+      setSyncMessage({ text: '✓ Synced to cloud! Other devices will see your changes.', type: 'success' });
+      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err) {
+      setSyncMessage({ text: '✗ Sync failed. Check your connection.', type: 'error' });
+      setTimeout(() => setSyncMessage(null), 4000);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handlePullLatest = async () => {
+    setPulling(true);
+    setSyncMessage(null);
+    try {
+      await onPullLatest();
+      // Update local state with pulled data
+      setDisplayName(p?.displayName || user.name);
+      setBio(p?.bio || "");
+      setWebsite(p?.website || "");
+      setLocation(p?.location || "");
+      setSyncMessage({ text: '✓ Pulled latest from cloud! Profile updated.', type: 'success' });
+      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err) {
+      setSyncMessage({ text: '✗ Pull failed. Check your connection.', type: 'error' });
+      setTimeout(() => setSyncMessage(null), 4000);
+    } finally {
+      setPulling(false);
+    }
   };
   const handleSaveNotifs = () => { localStorage.setItem(NOTIF_KEY, JSON.stringify(notifs)); setSaved(true); setTimeout(() => setSaved(false), 2500); };
   const handleSavePrivacy = () => { localStorage.setItem(PRIVACY_KEY, JSON.stringify(privacy)); setSaved(true); setTimeout(() => setSaved(false), 2500); };
@@ -2770,9 +2809,31 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
               {saved && <span style={{ fontSize: 11, color: tk.green, fontWeight: 500 }}>✓ Saved</span>}
             </div>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", background: tk.bgAlt, borderRadius: 9, border: `1px solid ${tk.border}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", background: tk.bgAlt, borderRadius: 9, border: `1px solid ${tk.border}`, marginBottom: 12 }}>
                 {user.avatar ? <img src={user.avatar} alt={displayName} style={{ width: 52, height: 52, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 52, height: 52, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{initial(displayName || user.name)}</div>}
                 <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 3 }}>{displayName || user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>Avatar synced from {user.provider || "email"}</div></div>
+              </div>
+              <div style={{ background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, borderRadius: 9, padding: "12px 14px" }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: tk.blue, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                  Cloud Sync
+                </div>
+                <div style={{ fontSize: 11, color: tk.blue, lineHeight: 1.5, marginBottom: 10 }}>
+                  Keep your profile synced across all devices. Changes you make here will appear on other devices logged in with <strong>{user.email}</strong>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
+                  <button onClick={handleManualSync} disabled={syncing} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: tk.blue, color: "#fff", cursor: syncing ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: syncing ? 0.6 : 1 }}>
+                    {syncing ? "Syncing..." : "↑ Push to Cloud"}
+                  </button>
+                  <button onClick={handlePullLatest} disabled={pulling} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${tk.blueBorder}`, background: "transparent", color: tk.blue, cursor: pulling ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: pulling ? 0.6 : 1 }}>
+                    {pulling ? "Pulling..." : "↓ Pull Latest"}
+                  </button>
+                </div>
+                {syncMessage && (
+                  <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 6, background: syncMessage.type === 'success' ? tk.greenLight : tk.roseLight, border: `1px solid ${syncMessage.type === 'success' ? tk.greenBorder : tk.roseBorder}`, fontSize: 11, color: syncMessage.type === 'success' ? tk.green : tk.rose, fontWeight: 500 }}>
+                    {syncMessage.text}
+                  </div>
+                )}
               </div>
             </div>
             {[{ label: "Display Name", value: displayName, set: setDisplayName, placeholder: "Your name", desc: "How your name appears on DevIQ.", multiline: false }, { label: "Bio", value: bio, set: setBio, placeholder: "Tell us about yourself…", desc: "Short bio shown on your profile.", multiline: true }, { label: "Website", value: website, set: setWebsite, placeholder: "https://yoursite.com", desc: "Your portfolio or personal site.", multiline: false }, { label: "Location", value: location, set: setLocation, placeholder: "City, Country", desc: "Where are you based?", multiline: false }].map(field => (
@@ -3008,6 +3069,25 @@ export default function Page() {
       setProfile(updated);
     }
     if (updated.displayName && updated.displayName !== user.name) { const u2 = { ...user, name: updated.displayName }; setUser(u2); saveSession(u2); }
+  };
+
+  const handleSyncNow = async () => {
+    if (!user || !profile) throw new Error('Not logged in');
+    console.log('🚀 Manual sync triggered');
+    const saved = await syncProfile(user.email, profile);
+    setProfile(saved);
+    saveProfile(user.email, saved);
+  };
+
+  const handlePullLatest = async () => {
+    if (!user) throw new Error('Not logged in');
+    console.log('⬇️ Pulling latest profile from cloud');
+    const latestProfile = await apiGetProfile();
+    if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
+    if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
+    if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
+    setProfile(latestProfile);
+    saveProfile(user.email, latestProfile);
   };
   const handleDeleteAccount = async () => { if (!user) return; try { await serverRequest('/auth/account', { method: 'DELETE' }); } catch { /* ignore */ } deleteAccount(user.email); setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home"); };
   const toggleDark = () => { setDark(d => { localStorage.setItem("deviq_dark", d ? "0" : "1"); return !d; }); };
@@ -3562,7 +3642,7 @@ export default function Page() {
           )}
 
           {/* SETTINGS */}
-          {page === "settings" && user && <SettingsPage user={user} profile={profile} tk={tk} isMobile={isMobile} dark={dark} onDarkToggle={toggleDark} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onProfileSave={handleProfileSave} />}
+          {page === "settings" && user && <SettingsPage user={user} profile={profile} tk={tk} isMobile={isMobile} dark={dark} onDarkToggle={toggleDark} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onProfileSave={handleProfileSave} onSyncNow={handleSyncNow} onPullLatest={handlePullLatest} />}
           {page === "settings" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to access settings.</div>
