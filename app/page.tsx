@@ -3003,9 +3003,20 @@ export default function Page() {
             // Save backend data to localStorage for offline access
             saveProfile(mergedUser.email, p);
             setProfile(p);
-          } catch {
-            // fallback to localStorage profile if server fails
+          } catch (err: any) {
+            // If NOT_MODIFIED, use localStorage (it's already current)
+            if (err?.message === 'NOT_MODIFIED') {
+              console.log('📦 Using cached profile (server confirms it\'s current)');
+              const p = loadProfile(mergedUser.email);
+              if (!p.displayName) p.displayName = mergedUser.name;
+              if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+              if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
+              setProfile(p);
+            } else {
+              // fallback to localStorage profile if server fails
+              console.log('⚠️ Backend unreachable, using cached profile');
             const p = loadProfile(mergedUser.email);
+                        }
             if (!p.displayName) p.displayName = mergedUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
             if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
