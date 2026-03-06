@@ -59,7 +59,8 @@ function GoogleCallbackInner() {
             : 'https://developer-portfolio-backend-bu76.onrender.com');
         
         try {
-          await fetch(`${API}/auth/gmail/login`, {
+          console.log('🔑 Creating backend session for:', data.email);
+          const backendRes = await fetch(`${API}/auth/gmail/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
@@ -69,9 +70,19 @@ function GoogleCallbackInner() {
               profile_picture_url: data.avatar || data.picture || data.image,
             }),
           });
-          console.log('✅ Backend session created');
+          
+          const backendData = await backendRes.json();
+          console.log('📦 Backend response:', backendRes.status, backendData);
+          
+          if (!backendRes.ok) {
+            console.error('❌ Backend session failed:', backendData);
+            throw new Error(`Backend session failed: ${backendData.error || backendRes.statusText}`);
+          }
+          
+          console.log('✅ Backend session created successfully');
         } catch (err) {
-          console.warn('⚠️ Backend session creation failed:', err);
+          console.error('⚠️ Backend session creation failed:', err);
+          // Don't fail the whole login, but user will need to re-auth
         }
         
         window.opener?.postMessage(
