@@ -1832,17 +1832,154 @@ function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUs
           <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
             <div style={{ padding: "12px 18px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3 }}>Platform Connections</span>
-              <button onClick={() => onNavigate("analyze")} style={{ fontSize: 11, color: tk.blue, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0, fontWeight: 500 }}>Run Analysis →</button>
+              {accountSaveMessage && (
+                <span style={{ fontSize: 10, fontWeight: 600, color: accountSaveMessage.type === 'success' ? tk.green : tk.rose }}>
+                  {accountSaveMessage.text}
+                </span>
+              )}
             </div>
-            {([{ name: "GitHub", platform: "github" as const, desc: "Code repositories & contribution activity", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder }, { name: "LeetCode", platform: "leetcode" as const, desc: "Coding challenge rankings & stats", color: tk.amber, bg: tk.amberLight, border: tk.amberBorder }, { name: "Codeforces", platform: "codeforces" as const, desc: "Competitive programming rating", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder }]).map((plt, i, arr) => (
-              <div key={plt.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 18px", borderBottom: i < arr.length - 1 ? `1px solid ${tk.border}` : "none", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: 8, background: plt.bg, border: `1px solid ${plt.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}><PlatformIcon platform={plt.platform} size={16} color={plt.color} /></div>
-                  <div><div style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>{plt.name}</div><div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{plt.desc}</div></div>
+            {[
+              { label: "GitHub", platform: "github", value: githubUsername, set: setGithubUsername, placeholder: "your-github-username", desc: "Code repositories & contribution activity", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder },
+              { label: "LeetCode", platform: "leetcode", value: leetcodeUsername, set: setLeetcodeUsername, placeholder: "your-leetcode-username", desc: "Coding challenge rankings & stats", color: tk.amber, bg: tk.amberLight, border: tk.amberBorder },
+              { label: "Codeforces", platform: "codeforces", value: codeforcesHandle, set: setCodeforcesHandle, placeholder: "your-codeforces-handle", desc: "Competitive programming rating", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder }
+            ].map((plt, i, arr) => {
+              const connection = connectedAccounts.find(acc => acc.platform === plt.platform && acc.is_active);
+              const isConnected = !!connection;
+              const isConnecting = connectingPlatform === plt.platform;
+              
+              return (
+                <div key={plt.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 18px", borderBottom: i < arr.length - 1 ? `1px solid ${tk.border}` : "none", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 8, background: plt.bg, border: `1px solid ${plt.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <PlatformIcon platform={plt.platform as "github" | "leetcode" | "codeforces"} size={16} color={plt.color} />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 2 }}>{plt.label}</div>
+                      <div style={{ fontSize: 11, color: tk.text3 }}>
+                        {isConnected ? `@${connection.platform_username}` : plt.desc}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {isConnected ? (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleManageAccount(plt.platform, connection.platform_username);
+                        }}
+                        style={{
+                          padding: "5px 12px",
+                          borderRadius: 6,
+                          border: `1px solid ${tk.blueBorder}`,
+                          background: tk.blue,
+                          color: "#fff",
+                          cursor: "pointer",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          fontFamily: "inherit"
+                        }}
+                      >
+                        Manage
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleDisconnectAccount(plt.platform);
+                        }}
+                        disabled={isConnecting}
+                        style={{
+                          padding: "5px 12px",
+                          borderRadius: 6,
+                          border: `1px solid ${tk.border}`,
+                          background: "transparent",
+                          color: tk.text3,
+                          cursor: isConnecting ? "wait" : "pointer",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          fontFamily: "inherit",
+                          opacity: isConnecting ? 0.5 : 1
+                        }}
+                      >
+                        {isConnecting ? "..." : "✕"}
+                      </button>
+                    </div>
+                  ) : (
+                    plt.platform === 'github' ? (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleConnectAccount(plt.platform, '');
+                        }}
+                        disabled={isConnecting}
+                        style={{
+                          padding: "5px 12px",
+                          borderRadius: 6,
+                          border: `1px solid ${tk.border}`,
+                          background: "transparent",
+                          cursor: isConnecting ? "wait" : "pointer",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: tk.text3,
+                          transition: "all 0.15s",
+                          fontFamily: "inherit",
+                          opacity: isConnecting ? 0.5 : 1
+                        }}
+                      >
+                        {isConnecting ? "Connecting..." : "Connect"}
+                      </button>
+                    ) : (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          value={plt.value}
+                          onChange={e => plt.set(e.target.value)}
+                          placeholder="username"
+                          type="text"
+                          style={{
+                            width: 120,
+                            padding: "5px 8px",
+                            borderRadius: 6,
+                            border: `1px solid ${tk.border}`,
+                            background: tk.bgAlt,
+                            color: tk.text,
+                            fontSize: 11,
+                            outline: "none",
+                            fontFamily: "inherit"
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleConnectAccount(plt.platform, plt.value);
+                          }}
+                          disabled={isConnecting || !plt.value.trim()}
+                          style={{
+                            padding: "5px 12px",
+                            borderRadius: 6,
+                            border: `1px solid ${tk.border}`,
+                            background: (isConnecting || !plt.value.trim()) ? tk.track : "transparent",
+                            cursor: (isConnecting || !plt.value.trim()) ? "not-allowed" : "pointer",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: tk.text3,
+                            transition: "all 0.15s",
+                            fontFamily: "inherit",
+                            opacity: (isConnecting || !plt.value.trim()) ? 0.5 : 1
+                          }}
+                        >
+                          {isConnecting ? "..." : "Connect"}
+                        </button>
+                      </div>
+                    )
+                  )}
                 </div>
-                <button onClick={() => onNavigate("analyze")} style={{ padding: "5px 12px", borderRadius: 6, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 11, fontWeight: 600, color: tk.text3, transition: "all 0.15s", fontFamily: "inherit" }}>Connect</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
             <div style={{ padding: "12px 18px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -3149,135 +3286,6 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                 <div style={{ fontSize: 11, color: tk.text3, marginTop: 5 }}>{field.desc}</div>
               </div>
             ))}
-            <div style={{ padding: "20px 20px 4px", borderBottom: `1px solid ${tk.border}`, background: tk.blueLight + "08" }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.blue, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"/><rect x="2" y="9" width="4" height="12"/><circle cx="4" cy="4" r="2"/></svg>
-                Connected Accounts
-              </div>
-              <div style={{ fontSize: 11, color: tk.text2, marginBottom: 14, lineHeight: 1.5 }}>
-                Connect your coding platforms to enable automatic data fetching and personalized insights.
-              </div>
-            </div>
-            {[
-              { label: "GitHub", platform: "github", value: githubUsername, set: setGithubUsername, placeholder: "your-github-username", desc: "Connect your GitHub account for repository and contribution analysis." },
-              { label: "LeetCode", platform: "leetcode", value: leetcodeUsername, set: setLeetcodeUsername, placeholder: "your-leetcode-username", desc: "Connect LeetCode to track your problem-solving progress." },
-              { label: "Codeforces", platform: "codeforces", value: codeforcesHandle, set: setCodeforcesHandle, placeholder: "your-codeforces-handle", desc: "Connect Codeforces to analyze your competitive programming stats." }
-            ].map(field => {
-              const connection = connectedAccounts.find(acc => acc.platform === field.platform && acc.is_active);
-              const isConnected = !!connection;
-              const isConnecting = connectingPlatform === field.platform;
-              
-              return (
-                <div key={field.label} style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3 }}>{field.label}</label>
-                    {isConnected && (
-                      <span style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: tk.greenLight, color: tk.green, border: `1px solid ${tk.greenBorder}` }}>
-                        ✓ Connected
-                      </span>
-                    )}
-                  </div>
-                  
-                  {isConnected ? (
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <div style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.greenBorder}`, background: tk.greenLight + "20", color: tk.text, fontSize: 13, fontFamily: "monospace" }}>
-                        @{connection.platform_username}
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleManageAccount(field.platform, connection.platform_username);
-                        }}
-                        style={{
-                          padding: "9px 16px",
-                          borderRadius: 7,
-                          border: `1px solid ${tk.blueBorder}`,
-                          background: tk.blue,
-                          color: "#fff",
-                          cursor: "pointer",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          fontFamily: "inherit"
-                        }}
-                      >
-                        Manage
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleDisconnectAccount(field.platform);
-                        }}
-                        disabled={isConnecting}
-                        style={{
-                          padding: "9px 16px",
-                          borderRadius: 7,
-                          border: `1px solid ${tk.roseBorder}`,
-                          background: "transparent",
-                          color: tk.rose,
-                          cursor: isConnecting ? "wait" : "pointer",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          fontFamily: "inherit",
-                          opacity: isConnecting ? 0.5 : 1
-                        }}
-                      >
-                        {isConnecting ? "..." : "Disconnect"}
-                      </button>
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      {field.platform !== 'github' && (
-                        <input
-                          value={field.value}
-                          onChange={e => field.set(e.target.value)}
-                          placeholder={field.placeholder}
-                          type="text"
-                          style={{
-                            flex: 1,
-                            padding: "9px 12px",
-                            borderRadius: 8,
-                            border: `1px solid ${tk.border}`,
-                            background: tk.bgAlt,
-                            color: tk.text,
-                            fontSize: 13,
-                            outline: "none",
-                            fontFamily: "inherit",
-                            boxSizing: "border-box" as const
-                          }}
-                        />
-                      )}
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleConnectAccount(field.platform, field.value);
-                        }}
-                        disabled={isConnecting || (field.platform !== 'github' && !field.value.trim())}
-                        style={{
-                          padding: "9px 16px",
-                          borderRadius: 7,
-                          border: `1px solid ${tk.blueBorder}`,
-                          background: (isConnecting || (field.platform !== 'github' && !field.value.trim())) ? tk.track : tk.blue,
-                          color: "#fff",
-                          cursor: (isConnecting || (field.platform !== 'github' && !field.value.trim())) ? "not-allowed" : "pointer",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          fontFamily: "inherit",
-                          opacity: (isConnecting || (field.platform !== 'github' && !field.value.trim())) ? 0.5 : 1,
-                          flex: field.platform === 'github' ? 1 : 'none'
-                        }}
-                      >
-                        {isConnecting ? "Connecting..." : (field.platform === 'github' ? "Connect with GitHub" : "Connect")}
-                      </button>
-                    </div>
-                  )}
-                  
-                  <div style={{ fontSize: 11, color: tk.text3, marginTop: 5 }}>{field.desc}</div>
-                </div>
-              );
-            })}
             <div style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
               <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3, display: "block", marginBottom: 6 }}>Email Address</label>
               <div style={{ display: "flex", gap: 8 }}>
