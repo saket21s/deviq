@@ -486,6 +486,16 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
   return {
     bio: p.bio || "",
     profile_picture_url: p.avatar || "",
+    recentAnalyses: p.recentAnalyses || [],
+    following: p.following || [],
+    notifications: p.notifications || [],
+    analysesRun: p.analysesRun || 0,
+    displayName: p.displayName || "",
+    joinedAt: p.joinedAt || "",
+    avatar: p.avatar || "",
+    solvedProblems: p.solvedProblems || [],
+    weakCategories: p.weakCategories || [],
+    lastPracticeProblem: p.lastPracticeProblem,
   };
 }
 
@@ -525,7 +535,9 @@ async function syncProfile(email: string, p: UserProfile): Promise<UserProfile> 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(toBackendProfilePayload(p)),
     });
-    const updated = normalizeUserProfile(remote, p);
+    // Extract user data from response (it has {message, user} structure)
+    const userData = remote.user || remote;
+    const updated = normalizeUserProfile(userData, p);
     // Update localStorage with backend response
     saveProfile(email, updated);
     return updated;
