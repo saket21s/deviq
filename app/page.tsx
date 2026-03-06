@@ -1,11 +1,17 @@
 "use client";
 import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
 
-// base URL for the backend service; you can run the Python/FastAPI server locally
-// and point at it by setting NEXT_PUBLIC_API_BASE_URL (eg. http://localhost:8000).
-// the remote render.com host also provides the same endpoints, so the default
-// is the public API used for analysis and user persistence.
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || "https://developer-portfolio-backend-bu76.onrender.com";
+// base URL for the backend service.  During development we prefer a
+// local copy so that you can iterate without depending on the deployed
+// instance (which may still be on an old version).  If the front-end is
+// served from localhost we automatically default to the local server, but
+// you can override everything with NEXT_PUBLIC_API_BASE_URL.
+//
+// Production builds should set NEXT_PUBLIC_API_BASE_URL to the real host.
+const defaultAPI = (typeof window !== 'undefined' && window.location.hostname === 'localhost')
+  ? 'http://localhost:8000'
+  : 'https://developer-portfolio-backend-bu76.onrender.com';
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || defaultAPI;
 const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
 const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
@@ -167,12 +173,31 @@ function deleteAccount(email: string) { const users = getUsers().filter(u => u.e
 // -----------------------------------------------------------------------------
 async function serverRequest(path: string, opts: RequestInit = {}) {
   opts.credentials = "include";
-  const res = await fetch(`${API}${path}`, opts);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || res.statusText);
+
+  // helper that actually executes a fetch and throws on bad status
+  const doFetch = async (base: string) => {
+    const r = await fetch(`${base}${path}`, opts);
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(t || r.statusText);
+    }
+    return r.json();
+  };
+
+  try {
+    return await doFetch(API);
+  } catch (err) {
+    // if the remote host is the default render.com address and it fails,
+    // try the local backend as a convenience for development.
+    if (API.includes("developer-portfolio-backend-bu76.onrender.com")) {
+      try {
+        return await doFetch("http://localhost:8000");
+      } catch {
+        // ignore; we'll rethrow the original error below
+      }
+    }
+    throw err;
   }
-  return res.json();
 }
 
 async function apiSignup(name: string, email: string, password: string, avatar?: string, provider?: string): Promise<AuthUser> {
@@ -223,6 +248,11 @@ async function apiSaveProfile(p: UserProfile): Promise<UserProfile> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(p),
   });
+}
+
+function initial(str?: string): string {
+  if (str && str.length > 0) return str[0].toUpperCase();
+  return "?";
 }
 
 function pwStrength(pw: string): number {
@@ -1266,7 +1296,7 @@ function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUs
         </div>
         <div style={{ position: "absolute", bottom: isMobile ? -38 : -46, left: isMobile ? 20 : 32 }}>
           <div style={{ position: "relative" }}>
-            {user.avatar ? <img src={user.avatar} alt={displayName} style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", objectFit: "cover", border: `3px solid ${tk.bg}`, boxShadow: tk.shadowMd, display: "block" }} /> : <div style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", background: providerColor, border: `3px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: isMobile ? 28 : 34, fontWeight: 700, color: "#fff", boxShadow: tk.shadowMd, letterSpacing: "-0.03em" }}>{displayName[0].toUpperCase()}</div>}
+            {user.avatar ? <img src={user.avatar} alt={displayName} style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", objectFit: "cover", border: `3px solid ${tk.bg}`, boxShadow: tk.shadowMd, display: "block" }} /> : <div style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", background: providerColor, border: `3px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: isMobile ? 28 : 34, fontWeight: 700, color: "#fff", boxShadow: tk.shadowMd, letterSpacing: "-0.03em" }}>{initial(displayName)}</div>}
             <div style={{ position: "absolute", bottom: 2, right: 2, width: 24, height: 24, borderRadius: "50%", background: providerColor, border: `2px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
               {user.provider === "github" && <GitHubIcon size={12} color="#fff" />}
               {user.provider === "google" && <GoogleIcon size={12} />}
@@ -2145,7 +2175,7 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
                         <img src={result.avatar} alt={result.username} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover" }} />
                       ) : (
                         <div style={{ width: 32, height: 32, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 600, color: "#fff" }}>
-                          {result.username[0].toUpperCase()}
+                          {initial(result.username)}
                         </div>
                       )}
                       <div>
@@ -2187,7 +2217,7 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
                       <img src={followed.avatar} alt={followed.username} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
                     ) : (
                       <div style={{ width: 40, height: 40, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 600, color: "#fff" }}>
-                        {followed.username[0].toUpperCase()}
+                        {initial(followed.username)}
                       </div>
                     )}
                     <div>
@@ -2333,7 +2363,7 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
             </div>
             <div style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}` }}>
               <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px", background: tk.bgAlt, borderRadius: 9, border: `1px solid ${tk.border}` }}>
-                {user.avatar ? <img src={user.avatar} alt={displayName} style={{ width: 52, height: 52, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 52, height: 52, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{(displayName || user.name)[0].toUpperCase()}</div>}
+                {user.avatar ? <img src={user.avatar} alt={displayName} style={{ width: 52, height: 52, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 52, height: 52, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{initial(displayName || user.name)}</div>}
                 <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 3 }}>{displayName || user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>Avatar synced from {user.provider || "email"}</div></div>
               </div>
             </div>
@@ -2769,7 +2799,7 @@ export default function Page() {
                 <div style={{ position: "relative" }}>
                   <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
                     {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
-                    <div style={{ width: 24, height: 24, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div>
+                    <div style={{ width: 24, height: 24, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
                     <span style={{ fontSize: 12, fontWeight: 500, color: tk.text, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name}</span>
                     <svg width={10} height={10} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </button>
@@ -2778,7 +2808,7 @@ export default function Page() {
                       <div style={{ padding: "12px 14px 10px", borderBottom: `1px solid ${tk.border}` }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                           {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} /> : null}
-                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{user.name[0].toUpperCase()}</div>
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{initial(user.name)}</div>
                           <div><div style={{ fontSize: 12, fontWeight: 600, color: tk.text }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}</div>
                         </div>
                         <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
@@ -2806,7 +2836,7 @@ export default function Page() {
                 <div style={{ position: "relative" }}>
                   <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 3px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
                     {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
-                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div>
+                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
                     <svg width={9} height={9} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </button>
                   {userMenuOpen && (
@@ -2814,7 +2844,7 @@ export default function Page() {
                       <div style={{ padding: "12px 14px 10px", borderBottom: `1px solid ${tk.border}` }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                           {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} /> : null}
-                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{user.name[0].toUpperCase()}</div>
+                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{initial(user.name)}</div>
                           <div><div style={{ fontSize: 12, fontWeight: 600, color: tk.text }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}</div>
                         </div>
                         <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
@@ -2857,7 +2887,7 @@ export default function Page() {
         {/* MOBILE MENU - OUTSIDE NAV FOR BETTER POSITIONING */}
         {isMobile && menuOpen && (
           <div className="slide-down" style={{ borderTop: `1px solid ${tk.border}`, background: dark ? "rgba(10,10,10,0.98)" : "rgba(245,245,245,0.98)", paddingBottom: 8, position: "fixed", top: 58, left: 0, right: 0, zIndex: 300, maxHeight: "calc(100vh - 58px)", overflowY: "auto" as const }} onClick={e => e.stopPropagation()}>
-              {user && (<div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>{user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}<div style={{ width: 32, height: 32, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{user.name[0].toUpperCase()}</div><div><div style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>{user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>{user.email}</div></div></div>)}
+              {user && (<div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>{user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}<div style={{ width: 32, height: 32, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div><div><div style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>{user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>{user.email}</div></div></div>)}
               {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }] as { id: Page; label: string }[]).map(item => (
                 <button key={item.id} onClick={() => navigate(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", textAlign: "left", padding: "16px 20px", border: "none", borderBottom: `1px solid ${tk.border}`, background: page === item.id ? tk.bgAlt : "transparent", cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 400, color: page === item.id ? tk.text : tk.text2, fontFamily: "inherit" }}>
                   {item.label}{page === item.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: tk.blue, flexShrink: 0 }} />}

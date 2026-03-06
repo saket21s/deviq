@@ -40,11 +40,21 @@ via cookies.
 
 ## Configuring the frontend
 
-The frontend application (`app/page.tsx`) communicates with the backend. By
-default it uses the public API at
-`https://developer-portfolio-backend-bu76.onrender.com`, but you can override
-the base URL by setting the environment variable `NEXT_PUBLIC_API_BASE_URL`
-(e.g. `http://localhost:8000`).
+The frontend application (`app/page.tsx`) communicates with the backend.
+For convenience during development, the client automatically defaults to
+`http://localhost:8000` when the page is being served from `localhost`.
+This means you can start the Python server locally and the pages will talk
+there without needing to set any environment variables.  If you prefer to
+hit the deployed service, set `NEXT_PUBLIC_API_BASE_URL` to the desired
+URL (e.g. `https://developer-portfolio-backend-bu76.onrender.com`).
+
+If the remote API responds with 404/CORS failures the client will even try
+a second request against `http://localhost:8000` before giving up – this
+makes it easy to keep working even if the public deployment is out of date.
+
+Production builds should always explicitly configure `NEXT_PUBLIC_API_BASE_URL`
+and ensure the backend has been deployed with the updated code and the
+appropriate `FRONTEND_ORIGINS` environment variable set.
 
 Install dependencies and run the frontend as usual with Next.js.
 
