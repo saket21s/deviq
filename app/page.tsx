@@ -442,10 +442,10 @@ async function apiFetchSession(): Promise<AuthUser | null> {
     }
     return merged;
   } catch (err: any) {
-    // If backend explicitly says unauthenticated, clear stale local session.
+    // If backend explicitly says unauthenticated, keep local session to avoid
+    // logging out users on refresh due to transient cookie/session issues.
     if (err?.status === 401) {
-      clearSession();
-      return null;
+      return loadSession();
     }
     // network / transient issue fallback
     return loadSession();
@@ -3103,17 +3103,22 @@ export default function Page() {
           // fallback to local storage
           const savedUser = loadSession();
           if (savedUser) {
-            // For OAuth users, require a valid backend session to avoid ghost-login UI.
-            if (savedUser.provider === "google" || savedUser.provider === "github") {
-              clearSession();
-              setUser(null);
-              setProfile(null);
-            } else {
-              setUser(savedUser);
-              const p = loadProfile(savedUser.email);
-              if (!p.displayName) p.displayName = savedUser.name;
-              if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-              saveProfile(savedUser.email, p); setProfile(p);
+            setUser(savedUser);
+            const p = loadProfile(savedUser.email);
+            if (!p.displayName) p.displayName = savedUser.name;
+            if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+            saveProfile(savedUser.email, p); setProfile(p);
+
+            // Best effort: silently restore backend cookie session for Google users.
+            if (savedUser.provider === "google") {
+              apiGmailLogin({ name: savedUser.name, email: savedUser.email, avatar: savedUser.avatar })
+                .then((restored) => {
+                  if (!restored) return;
+                  const merged = enrichAuthUser(restored);
+                  setUser(merged);
+                  cacheAuthUser(merged);
+                })
+                .catch(() => {});
             }
           }
         }
