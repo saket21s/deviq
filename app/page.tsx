@@ -300,7 +300,8 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
   } catch (err) {
     // if the remote host is the default render.com address and it fails,
     // try the local backend as a convenience for development.
-    if (API.includes("developer-portfolio-backend-bu76.onrender.com")) {
+    const isLocalFrontend = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+    if (isLocalFrontend && API.includes("developer-portfolio-backend-bu76.onrender.com")) {
       try {
         return await doFetch("http://localhost:8000");
       } catch {
@@ -429,8 +430,13 @@ async function apiGmailLogin(user?: { name?: string; email?: string; avatar?: st
 async function apiFetchSession(): Promise<AuthUser | null> {
   try {
     const remote = await serverRequest('/auth/me');
+    if (remote === null) {
+      return loadSession();
+    }
     const merged = enrichAuthUser(coerceAuthUser(remote));
-    saveSession(merged);
+    if (merged?.email) {
+      saveSession(merged);
+    }
     return merged;
   } catch {
     // fallback to localStorage
@@ -3015,12 +3021,12 @@ export default function Page() {
             } else {
               // fallback to localStorage profile if server fails
               console.log('⚠️ Backend unreachable, using cached profile');
-            const p = loadProfile(mergedUser.email);
-                        }
-            if (!p.displayName) p.displayName = mergedUser.name;
-            if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-            if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
-            setProfile(p);
+              const p = loadProfile(mergedUser.email);
+              if (!p.displayName) p.displayName = mergedUser.name;
+              if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+              if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
+              setProfile(p);
+            }
           }
         } else {
           // fallback to local storage
