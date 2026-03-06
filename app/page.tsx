@@ -2518,7 +2518,13 @@ export default function Page() {
             if (!p.displayName) p.displayName = serverUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
             setProfile(p);
-          } catch { /* ignore */ }
+          } catch {
+            // fallback to localStorage profile if server fails
+            const p = loadProfile(serverUser.email);
+            if (!p.displayName) p.displayName = serverUser.name;
+            if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+            setProfile(p);
+          }
         } else {
           // fallback to local storage
           const savedUser = loadSession();
