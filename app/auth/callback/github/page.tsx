@@ -37,19 +37,8 @@ function GitHubCallbackInner() {
       localStorage.removeItem("github_connect_state");
       localStorage.removeItem("github_connect_action");
       
-      // Step 1: Get the token from localStorage
-      console.log('📝 Getting auth token from localStorage...');
+      // Optional token from localStorage; cookie auth is primary
       const authToken = localStorage.getItem("auth_token");
-      
-      if (!authToken) {
-        console.error('❌ No auth token found');
-        window.opener?.postMessage(
-          { type: "OAUTH_ERROR", message: "Authentication required" },
-          window.location.origin
-        );
-        window.close();
-        return;
-      }
 
       // Step 2: Exchange code for user data
       fetch("/api/auth/github", {
@@ -74,9 +63,10 @@ function GitHubCallbackInner() {
           
           const connectResp = await fetch(`${BACKEND}/accounts/connect/github`, {
             method: "POST",
+            credentials: "include",
             headers: { 
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${authToken}`
+              ...(authToken ? { "Authorization": `Bearer ${authToken}` } : {})
             },
             body: JSON.stringify({ 
               username: data.login || data.name,
