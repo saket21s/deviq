@@ -56,7 +56,7 @@ function GoogleCallbackInner() {
             type: "OAUTH_SUCCESS",
             name: data.name,
             email: data.email,
-            avatar: data.avatar,
+            avatar: data.avatar || data.picture || data.image,
             provider: "google",
           },
           window.location.origin

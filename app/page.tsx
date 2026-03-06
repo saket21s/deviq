@@ -152,6 +152,7 @@ interface WeakCategory {
 }
 interface UserProfile {
   displayName: string; bio: string; website: string; location: string; joinedAt: string;
+  avatar?: string;
   analysesRun: number; comparisonsRun: number; aiInsightsRun: number;
   recentAnalyses?: AnalysisRecord[];
   following?: FollowedUser[]; followers?: string[]; notifications?: Notification[];
@@ -164,9 +165,93 @@ function emailExists(email: string): boolean { return getUsers().some(u => u.ema
 function saveSession(u: AuthUser) { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); }
 function loadSession(): AuthUser | null { try { const s = localStorage.getItem(SESSION_KEY); return s ? JSON.parse(s) : null; } catch { return null; } }
 function clearSession() { localStorage.removeItem(SESSION_KEY); }
-function loadProfile(email: string): UserProfile { try { const raw = localStorage.getItem(`${PROFILE_KEY}_${email}`); if (raw) return JSON.parse(raw); } catch { } return { displayName: "", bio: "", website: "", location: "", joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }; }
-function saveProfile(email: string, p: UserProfile) { localStorage.setItem(`${PROFILE_KEY}_${email}`, JSON.stringify(p)); }
+function loadProfile(email: string): UserProfile {
+  try {
+    const raw = localStorage.getItem(`${PROFILE_KEY}_${email}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return normalizeUserProfile(parsed);
+    }
+  } catch { }
+  return {
+    displayName: "",
+    bio: "",
+    website: "",
+    location: "",
+    joinedAt: new Date().toISOString(),
+    analysesRun: 0,
+    comparisonsRun: 0,
+    aiInsightsRun: 0,
+  };
+}
+function saveProfile(email: string, p: UserProfile) {
+  localStorage.setItem(`${PROFILE_KEY}_${email}`, JSON.stringify(normalizeUserProfile(p)));
+}
 function deleteAccount(email: string) { const users = getUsers().filter(u => u.email.toLowerCase() !== email.toLowerCase()); localStorage.setItem(USERS_KEY, JSON.stringify(users)); clearSession(); localStorage.removeItem(`${PROFILE_KEY}_${email}`); }
+
+function normalizeProvider(provider?: string): "google" | "github" | "email" | undefined {
+  const p = (provider || "").toLowerCase();
+  if (p === "google" || p === "gmail") return "google";
+  if (p === "github") return "github";
+  if (p === "email") return "email";
+  return undefined;
+}
+
+function normalizeAvatarUrl(url?: string): string | undefined {
+  const raw = (url || "").trim();
+  if (!raw) return undefined;
+  if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
+  try {
+    return new URL(raw, API).toString();
+  } catch {
+    return raw;
+  }
+}
+
+function coerceAuthUser(payload: any, fallback?: Partial<AuthUser>): AuthUser {
+  const nestedUser = (payload?.user && typeof payload.user === "object") ? payload.user : undefined;
+  const source = nestedUser || payload;
+  const name = source?.name || source?.full_name || source?.username || source?.login || payload?.name || fallback?.name || "User";
+  const email = source?.email || payload?.email || fallback?.email || "";
+  const avatar = normalizeAvatarUrl(
+    source?.avatar ||
+    source?.picture ||
+    source?.image ||
+    source?.avatar_url ||
+    source?.photo ||
+    source?.profile_picture_url ||
+    source?.image_url ||
+    payload?.avatar ||
+    payload?.profile_picture_url ||
+    fallback?.avatar
+  );
+  const provider = normalizeProvider(source?.provider || payload?.provider || payload?.auth_provider || payload?.source || fallback?.provider);
+  return { name, email, avatar, provider };
+}
+
+function enrichAuthUser(base: AuthUser): AuthUser {
+  const local = getUsers().find(u => u.email.toLowerCase() === base.email.toLowerCase());
+  const session = loadSession();
+  const sessionMatch = session?.email?.toLowerCase() === base.email.toLowerCase() ? session : null;
+  return {
+    ...base,
+    avatar: normalizeAvatarUrl(base.avatar || local?.avatar || sessionMatch?.avatar),
+    provider: normalizeProvider(base.provider) || normalizeProvider(local?.provider) || normalizeProvider(sessionMatch?.provider),
+  };
+}
+
+function cacheAuthUser(user: AuthUser) {
+  const normalized = enrichAuthUser(user);
+  const existing = getUsers().find(u => u.email.toLowerCase() === normalized.email.toLowerCase());
+  saveUser({
+    name: normalized.name,
+    email: normalized.email,
+    password: existing?.password || "",
+    avatar: normalized.avatar,
+    provider: normalized.provider,
+  });
+  saveSession(normalized);
+}
 
 // -----------------------------------------------------------------------------
 // Server API helpers (credentials included) and optional local-storage fallback
@@ -179,6 +264,16 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
     const r = await fetch(`${base}${path}`, opts);
     if (!r.ok) {
       const t = await r.text();
+      // Suppress expected 401s during auth/profile fallback flow
+      const suppress401 = r.status === 401 && (
+        path.includes('/auth/me') ||
+        path.includes('/profile') ||
+        path.includes('/sync/profile')
+      );
+      const suppressLogout = path.includes('/auth/logout') && (r.status === 400 || r.status === 401);
+      if (!suppress401 && !suppressLogout) {
+        console.error(`API Error: ${r.status} ${r.statusText} on ${path}`);
+      }
       throw new Error(t || r.statusText);
     }
     return r.json();
@@ -202,11 +297,14 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
 
 async function apiSignup(name: string, email: string, password: string, avatar?: string, provider?: string): Promise<AuthUser> {
   try {
-    return await serverRequest('/auth/signup', {
+    const remote = await serverRequest('/auth/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, email, password, avatar, provider }),
     });
+    const merged = enrichAuthUser(coerceAuthUser(remote, { name, email, avatar, provider: normalizeProvider(provider) }));
+    cacheAuthUser(merged);
+    return merged;
   } catch (err) {
     // fallback to localStorage
     if (!emailExists(email)) {
@@ -222,11 +320,14 @@ async function apiSignup(name: string, email: string, password: string, avatar?:
 
 async function apiLogin(email: string, password: string): Promise<AuthUser> {
   try {
-    return await serverRequest('/auth/login', {
+    const remote = await serverRequest('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
+    const merged = enrichAuthUser(coerceAuthUser(remote, { email, provider: "email" }));
+    cacheAuthUser(merged);
+    return merged;
   } catch (err) {
     // fallback to localStorage
     const user = findUser(email, password);
@@ -241,23 +342,80 @@ async function apiLogin(email: string, password: string): Promise<AuthUser> {
 
 async function apiOAuth(user: { name: string; email: string; avatar?: string; provider?: string; }): Promise<AuthUser> {
   try {
-    return await serverRequest('/auth/oauth', {
+    const remote = await serverRequest('/auth/oauth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(user),
+      body: JSON.stringify({
+        ...user,
+        profile_picture_url: user.avatar,
+        user: {
+          name: user.name,
+          email: user.email,
+          picture: user.avatar,
+        },
+      }),
     });
+    const merged = enrichAuthUser(coerceAuthUser(remote, { ...user, provider: normalizeProvider(user.provider) }));
+    cacheAuthUser(merged);
+    return merged;
   } catch (err) {
     // fallback to localStorage for OAuth
     const { name, email, avatar, provider } = user;
-    saveUser({ name, email, password: "", avatar, provider });
-    saveSession({ name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) });
-    return { name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) };
+    const merged = enrichAuthUser({ name, email, avatar, provider: normalizeProvider(provider) });
+    cacheAuthUser(merged);
+    return merged;
+  }
+}
+
+// Gmail direct login endpoint (via backend, with session cookie)
+async function apiGmailLogin(user?: { name?: string; email?: string; avatar?: string }): Promise<AuthUser | null> {
+  try {
+    const email = (user?.email || "").trim();
+    if (!email) return null;
+
+    const response = await fetch(`${API}/auth/gmail/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        email,
+        name: user?.name,
+        profile_picture_url: user?.avatar,
+      }),
+    });
+
+    // This endpoint is optional in some backends; fail softly and let caller fallback.
+    if (!response.ok) {
+      return null;
+    }
+
+    let payload: any = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    if (!payload) return null;
+
+    const normalized = enrichAuthUser(coerceAuthUser(payload, { provider: "google", email }));
+
+    // Save to localStorage as backup
+    if (normalized && normalized.email) {
+      cacheAuthUser(normalized);
+    }
+
+    return normalized;
+  } catch {
+    return null;
   }
 }
 
 async function apiFetchSession(): Promise<AuthUser | null> {
   try {
-    return await serverRequest('/auth/me');
+    const remote = await serverRequest('/auth/me');
+    const merged = enrichAuthUser(coerceAuthUser(remote));
+    saveSession(merged);
+    return merged;
   } catch {
     // fallback to localStorage
     return loadSession();
@@ -270,9 +428,71 @@ async function apiLogout(): Promise<void> {
   } catch { }
 }
 
+async function apiSaveProfilePicture(pictureUrl?: string): Promise<void> {
+  const url = normalizeAvatarUrl(pictureUrl);
+  if (!url) return;
+  try {
+    await serverRequest('/profile/picture', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ picture_url: url }),
+    });
+  } catch {
+    // best-effort only
+  }
+}
+
+function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile {
+  const source = (payload?.user && typeof payload.user === "object") ? payload.user : (payload || {});
+  const base: UserProfile = fallback || {
+    displayName: "",
+    bio: "",
+    website: "",
+    location: "",
+    joinedAt: new Date().toISOString(),
+    analysesRun: 0,
+    comparisonsRun: 0,
+    aiInsightsRun: 0,
+  };
+
+  return {
+    ...base,
+    displayName: source.displayName || source.name || source.username || base.displayName || "",
+    bio: typeof source.bio === "string" ? source.bio : (base.bio || ""),
+    website: typeof source.website === "string" ? source.website : (base.website || ""),
+    location: typeof source.location === "string" ? source.location : (base.location || ""),
+    joinedAt: source.joinedAt || source.created_at || base.joinedAt || new Date().toISOString(),
+    avatar: normalizeAvatarUrl(
+      source.avatar ||
+      source.profile_picture_url ||
+      source.picture ||
+      source.photo ||
+      base.avatar
+    ),
+    analysesRun: typeof source.analysesRun === "number" ? source.analysesRun : (base.analysesRun || 0),
+    comparisonsRun: typeof source.comparisonsRun === "number" ? source.comparisonsRun : (base.comparisonsRun || 0),
+    aiInsightsRun: typeof source.aiInsightsRun === "number" ? source.aiInsightsRun : (base.aiInsightsRun || 0),
+    recentAnalyses: Array.isArray(source.recentAnalyses) ? source.recentAnalyses : base.recentAnalyses,
+    following: Array.isArray(source.following) ? source.following : base.following,
+    followers: Array.isArray(source.followers) ? source.followers : base.followers,
+    notifications: Array.isArray(source.notifications) ? source.notifications : base.notifications,
+    solvedProblems: Array.isArray(source.solvedProblems) ? source.solvedProblems : base.solvedProblems,
+    weakCategories: Array.isArray(source.weakCategories) ? source.weakCategories : base.weakCategories,
+    lastPracticeProblem: source.lastPracticeProblem || base.lastPracticeProblem,
+  };
+}
+
+function toBackendProfilePayload(p: UserProfile): Record<string, any> {
+  return {
+    bio: p.bio || "",
+    profile_picture_url: p.avatar || "",
+  };
+}
+
 async function apiGetProfile(): Promise<UserProfile> {
   try {
-    return await serverRequest('/profile');
+    const remote = await serverRequest('/profile');
+    return normalizeUserProfile(remote);
   } catch (err) {
     // If backend fails, this will throw and caller should use loadProfile
     throw err;
@@ -281,11 +501,12 @@ async function apiGetProfile(): Promise<UserProfile> {
 
 async function apiSaveProfile(p: UserProfile): Promise<UserProfile> {
   try {
-    return await serverRequest('/profile', {
+    const remote = await serverRequest('/profile', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(p),
+      body: JSON.stringify(toBackendProfilePayload(p)),
     });
+    return normalizeUserProfile(remote, p);
   } catch (err) {
     // If backend fails, return the profile as-is (localStorage will be used by caller)
     return p;
@@ -297,15 +518,27 @@ async function syncProfile(email: string, p: UserProfile): Promise<UserProfile> 
   // Save to localStorage immediately
   saveProfile(email, p);
   
-  // Try to sync to backend
+  // Try to sync to backend with dedicated sync endpoint
   try {
-    const updated = await apiSaveProfile(p);
+    const remote = await serverRequest('/sync/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toBackendProfilePayload(p)),
+    });
+    const updated = normalizeUserProfile(remote, p);
     // Update localStorage with backend response
     saveProfile(email, updated);
     return updated;
   } catch {
-    // Backend failed, but localStorage is saved
-    return p;
+    // Fallback to regular save endpoint
+    try {
+      const updated = await apiSaveProfile(p);
+      saveProfile(email, updated);
+      return updated;
+    } catch {
+      // Backend unavailable, localStorage is saved
+      return p;
+    }
   }
 }
 
@@ -1170,12 +1403,37 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "OAUTH_SUCCESS") {
         const { name: n, email: e, avatar, provider } = event.data;
-        // persist on backend and then notify host
-        apiOAuth({ name: n, email: e, avatar, provider })
-          .then(u => {
+        const callbackAvatar = normalizeAvatarUrl(avatar);
+
+        // For Google, prefer backend gmail session endpoint, then sync with callback payload.
+        // For GitHub, use regular OAuth persist flow.
+        const persist = async () => {
+          if (provider === "google") {
+            const gmailUser = await apiGmailLogin({ name: n, email: e, avatar: callbackAvatar });
+            const cloudUser = await apiFetchSession();
+            if (cloudUser) {
+              return enrichAuthUser({
+                ...cloudUser,
+                avatar: cloudUser.avatar || callbackAvatar,
+                provider: normalizeProvider(cloudUser.provider) || "google",
+              });
+            }
+            if (gmailUser) return enrichAuthUser({ ...gmailUser, avatar: gmailUser.avatar || callbackAvatar, provider: "google" });
+          }
+          return await apiOAuth({ name: n, email: e, avatar: callbackAvatar, provider });
+        };
+
+        persist()
+          .then(async (u) => {
+            const resolved = enrichAuthUser({ ...u, avatar: u.avatar || callbackAvatar });
+            if (resolved.avatar) {
+              await apiSaveProfilePicture(resolved.avatar);
+              const refreshed = await apiFetchSession();
+              if (refreshed?.avatar) resolved.avatar = refreshed.avatar;
+            }
             setSuccess(true);
             setOauthLoading(null);
-            setTimeout(() => onAuth(u), 500);
+            setTimeout(() => onAuth(resolved), 500);
           })
           .catch(err => {
             setGlobalError(err.message || "OAuth failed.");
@@ -1195,8 +1453,49 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
     setOauthLoading(provider);
     const popup = openOAuthPopup(provider === "google" ? buildGoogleURL(state) : buildGitHubURL(state), `Sign in with ${provider === "google" ? "Google" : "GitHub"}`);
     if (!popup) { setGlobalError("Popup blocked."); setOauthLoading(null); return; }
-    const poll = setInterval(() => { try { if (popup.closed) { clearInterval(poll); setOauthLoading(null); } } catch { clearInterval(poll); } }, 500);
+    // Check if popup closed - with better error handling for COOP
+    const checkClosed = () => {
+      try {
+        if (popup.closed) {
+          clearInterval(poll);
+          setOauthLoading(null);
+        }
+      } catch (e) {
+        // COOP policy may block access, cleanup and stop polling
+        clearInterval(poll);
+      }
+    };
+    const poll = setInterval(checkClosed, 1000);
+    // Also cleanup after 10 minutes max
+    const timeout = setTimeout(() => { clearInterval(poll); setOauthLoading(null); }, 600000);
+    const originalUnload = () => { clearInterval(poll); clearTimeout(timeout); };
+    window.addEventListener('beforeunload', originalUnload);
+    // Cleanup on unmount
+    return () => { clearInterval(poll); clearTimeout(timeout); window.removeEventListener('beforeunload', originalUnload); };
   }, []);
+
+  const handleSocialAuth = useCallback(async (provider: "google" | "github") => {
+    setGlobalError("");
+    setOauthLoading(provider);
+    try {
+      if (provider === "google") {
+        // Preferred cloud-auth path for consistent cross-device sync
+        const direct = await apiGmailLogin();
+        const sessionUser = await apiFetchSession();
+        const resolved = sessionUser || direct;
+        if (resolved) {
+          setSuccess(true);
+          setOauthLoading(null);
+          setTimeout(() => onAuth(enrichAuthUser({ ...resolved, provider: "google" })), 350);
+          return;
+        }
+      }
+      // fallback to popup oauth
+      launchOAuth(provider);
+    } catch {
+      launchOAuth(provider);
+    }
+  }, [launchOAuth, onAuth]);
 
   const handleSubmit = () => {
     const allFields: Record<string, boolean> = isLogin ? { email: true, password: true } : { name: true, email: true, password: true, confirm: true };
@@ -1253,7 +1552,7 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
             {(["google", "github"] as const).map(provider => {
               const cfg = { google: { label: "Continue with Google", icon: <GoogleIcon size={16} />, spinColor: "#4285F4" }, github: { label: "Continue with GitHub", icon: <GitHubIcon size={16} color={tk.text} />, spinColor: tk.text } }[provider];
               return (
-                <button key={provider} onClick={() => launchOAuth(provider)} disabled={!!oauthLoading || success}
+                <button key={provider} onClick={() => handleSocialAuth(provider)} disabled={!!oauthLoading || success}
                   style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%", padding: "11px 16px", borderRadius: 9, border: `1.5px solid ${tk.border}`, background: tk.surface, cursor: oauthLoading ? "wait" : "pointer", fontSize: 13, fontWeight: 600, color: tk.text, fontFamily: "inherit", transition: "all 0.15s", opacity: oauthLoading && oauthLoading !== provider ? 0.5 : 1 }}>
                   {oauthLoading === provider ? <div style={{ width: 15, height: 15, border: `2px solid ${tk.border}`, borderTopColor: cfg.spinColor, borderRadius: "50%", animation: "spin 0.7s linear infinite" }} /> : cfg.icon}
                   {oauthLoading === provider ? "Opening…" : cfg.label}
@@ -1335,11 +1634,18 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
 ───────────────────────────────────────────────── */
 function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean; onNavigate: (p: Page) => void }) {
   const [avatarFailed, setAvatarFailed] = useState(false);
+  
+  // Reset avatarFailed when user changes
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [user.email, user.avatar]);
+  
   const p = profile;
   const joinDate = p?.joinedAt ? new Date(p.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : "—";
   const providerColors: Record<string, string> = { github: "#24292e", google: "#4285F4", email: tk.blue };
   const providerColor = providerColors[user.provider || "email"] || tk.blue;
   const displayName = p?.displayName || user.name;
+  const avatarUrl = user.avatar || p?.avatar;
   const stats = [
     { label: "Analyses Run", value: p?.analysesRun ?? 0, icon: "◎", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder },
     { label: "Comparisons", value: p?.comparisonsRun ?? 0, icon: "⇄", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder },
@@ -1356,12 +1662,13 @@ function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUs
           </button>
         </div>
         <div style={{ position: "absolute", bottom: isMobile ? -38 : -46, left: isMobile ? 20 : 32 }}>
-          <div style={{ position: "relative" }}>
-            {user.avatar && !avatarFailed ? (
+          <div style={{ position: "relative" }} key={`avatar-${avatarUrl || "none"}`}>
+            {avatarUrl && !avatarFailed ? (
               <img 
-                src={user.avatar} 
+                key={avatarUrl}
+                src={avatarUrl} 
                 alt={displayName} 
-                onError={() => setAvatarFailed(true)} 
+                onError={() => { setAvatarFailed(true); }} 
                 style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", objectFit: "cover", border: `3px solid ${tk.bg}`, boxShadow: tk.shadowMd, display: "block" }} 
               />
             ) : (
@@ -2539,17 +2846,29 @@ export default function Page() {
         // try server session first
         const serverUser = await apiFetchSession();
         if (serverUser) {
-          setUser(serverUser);
+          const mergedUser = enrichAuthUser(serverUser);
+          setUser(mergedUser);
+          cacheAuthUser(mergedUser);
           try {
             const p = await apiGetProfile();
-            if (!p.displayName) p.displayName = serverUser.name;
+            if (!p.displayName) p.displayName = mergedUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+            if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
+            if (!mergedUser.avatar && p.avatar) {
+              const enriched = enrichAuthUser({ ...mergedUser, avatar: p.avatar });
+              setUser(enriched);
+              cacheAuthUser(enriched);
+            }
             setProfile(p);
+            if (p.avatar && p.avatar !== profile?.avatar) {
+              syncProfile(mergedUser.email, p).catch(() => { });
+            }
           } catch {
             // fallback to localStorage profile if server fails
-            const p = loadProfile(serverUser.email);
-            if (!p.displayName) p.displayName = serverUser.name;
+            const p = loadProfile(mergedUser.email);
+            if (!p.displayName) p.displayName = mergedUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+            if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
             setProfile(p);
           }
         } else {
@@ -2577,20 +2896,24 @@ export default function Page() {
   }, []);
 
   const handleLogin = async (u: AuthUser) => {
-    setUser(u);
+    const mergedUser = enrichAuthUser(u);
+    setUser(mergedUser);
     // store locally in case of offline fallback
-    saveSession(u);
+    cacheAuthUser(mergedUser);
     try {
       const p = await apiGetProfile();
-      if (!p.displayName) p.displayName = u.name;
+      if (!p.displayName) p.displayName = mergedUser.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+      if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
       setProfile(p);
+      syncProfile(mergedUser.email, p).catch(() => { });
     } catch {
       // fallback to local profile store and sync to backend
-      const p = loadProfile(u.email);
-      if (!p.displayName) p.displayName = u.name;
+      const p = loadProfile(mergedUser.email);
+      if (!p.displayName) p.displayName = mergedUser.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-      syncProfile(u.email, p).then(saved => setProfile(saved)).catch(() => setProfile(p));
+      if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
+      syncProfile(mergedUser.email, p).then(saved => setProfile(saved)).catch(() => setProfile(p));
     }
     setAuthModal(null); setMenuOpen(false);
   };

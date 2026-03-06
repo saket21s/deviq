@@ -45,14 +45,20 @@ function GitHubCallbackInner() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code }),
     })
-      .then((r) => r.json())
+      .then(async (r) => {
+        const data = await r.json();
+        if (!r.ok || data?.error) {
+          throw new Error(data?.error || "GitHub OAuth failed");
+        }
+        return data;
+      })
       .then((data) => {
         window.opener?.postMessage(
           {
             type: "OAUTH_SUCCESS",
             name: data.name,
             email: data.email,
-            avatar: data.avatar,
+            avatar: data.avatar || data.avatar_url || data.picture,
             provider: "github",
           },
           window.location.origin
