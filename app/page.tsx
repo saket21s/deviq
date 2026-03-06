@@ -201,34 +201,66 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
 }
 
 async function apiSignup(name: string, email: string, password: string, avatar?: string, provider?: string): Promise<AuthUser> {
-  return serverRequest('/auth/signup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, email, password, avatar, provider }),
-  });
+  try {
+    return await serverRequest('/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password, avatar, provider }),
+    });
+  } catch (err) {
+    // fallback to localStorage
+    if (!emailExists(email)) {
+      const user = { name, email, password, avatar, provider };
+      saveUser(user);
+      saveSession({ name, email, avatar, provider });
+      return { name, email, avatar, provider };
+    } else {
+      throw new Error('Email already exists (local)');
+    }
+  }
 }
 
 async function apiLogin(email: string, password: string): Promise<AuthUser> {
-  return serverRequest('/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
+  try {
+    return await serverRequest('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch (err) {
+    // fallback to localStorage
+    const user = findUser(email, password);
+    if (user) {
+      saveSession({ name: user.name, email: user.email, avatar: user.avatar, provider: user.provider });
+      return { name: user.name, email: user.email, avatar: user.avatar, provider: user.provider };
+    } else {
+      throw new Error('Invalid email or password (local)');
+    }
+  }
 }
 
 async function apiOAuth(user: { name: string; email: string; avatar?: string; provider?: string; }): Promise<AuthUser> {
-  return serverRequest('/auth/oauth', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(user),
-  });
+  try {
+    return await serverRequest('/auth/oauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user),
+    });
+  } catch (err) {
+    // fallback to localStorage for OAuth
+    const { name, email, avatar, provider } = user;
+    saveUser({ name, email, password: "", avatar, provider });
+    saveSession({ name, email, avatar, provider });
+    return { name, email, avatar, provider };
+  }
 }
 
 async function apiFetchSession(): Promise<AuthUser | null> {
   try {
     return await serverRequest('/auth/me');
   } catch {
-    return null;
+    // fallback to localStorage
+    return loadSession();
   }
 }
 
@@ -1089,6 +1121,7 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [globalError, setGlobalError] = useState(""); const [submitting, setSubmitting] = useState(false); const [success, setSuccess] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<"google" | "github" | null>(null);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const isLogin = mode === "login";
   const touch = (f: string) => setTouched(t => ({ ...t, [f]: true }));
 
@@ -1135,7 +1168,7 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
     setOauthLoading(provider);
     const popup = openOAuthPopup(provider === "google" ? buildGoogleURL(state) : buildGitHubURL(state), `Sign in with ${provider === "google" ? "Google" : "GitHub"}`);
     if (!popup) { setGlobalError("Popup blocked."); setOauthLoading(null); return; }
-    const poll = setInterval(() => { if (popup.closed) { clearInterval(poll); setOauthLoading(null); } }, 500);
+    const poll = setInterval(() => { try { if (popup.closed) { clearInterval(poll); setOauthLoading(null); } } catch { clearInterval(poll); } }, 500);
   }, []);
 
   const handleSubmit = () => {
@@ -1296,7 +1329,16 @@ function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUs
         </div>
         <div style={{ position: "absolute", bottom: isMobile ? -38 : -46, left: isMobile ? 20 : 32 }}>
           <div style={{ position: "relative" }}>
-            {user.avatar ? <img src={user.avatar} alt={displayName} style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", objectFit: "cover", border: `3px solid ${tk.bg}`, boxShadow: tk.shadowMd, display: "block" }} /> : <div style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", background: providerColor, border: `3px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: isMobile ? 28 : 34, fontWeight: 700, color: "#fff", boxShadow: tk.shadowMd, letterSpacing: "-0.03em" }}>{initial(displayName)}</div>}
+            {user.avatar && !avatarFailed ? (
+              <img 
+                src={user.avatar} 
+                alt={displayName} 
+                onError={() => setAvatarFailed(true)} 
+                style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", objectFit: "cover", border: `3px solid ${tk.bg}`, boxShadow: tk.shadowMd, display: "block" }} 
+              />
+            ) : (
+              <div style={{ width: isMobile ? 76 : 92, height: isMobile ? 76 : 92, borderRadius: "50%", background: providerColor, border: `3px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: isMobile ? 28 : 34, fontWeight: 700, color: "#fff", boxShadow: tk.shadowMd, letterSpacing: "-0.03em" }}>{initial(displayName)}</div>
+            )}
             <div style={{ position: "absolute", bottom: 2, right: 2, width: 24, height: 24, borderRadius: "50%", background: providerColor, border: `2px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
               {user.provider === "github" && <GitHubIcon size={12} color="#fff" />}
               {user.provider === "google" && <GoogleIcon size={12} />}
