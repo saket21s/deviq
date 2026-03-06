@@ -3126,7 +3126,11 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                         @{connection.platform_username}
                       </div>
                       <button
-                        onClick={() => handleDisconnectAccount(field.platform)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleDisconnectAccount(field.platform);
+                        }}
                         disabled={isConnecting}
                         style={{
                           padding: "9px 16px",
@@ -3165,7 +3169,11 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                         }}
                       />
                       <button
-                        onClick={() => handleConnectAccount(field.platform, field.value)}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleConnectAccount(field.platform, field.value);
+                        }}
                         disabled={isConnecting || !field.value.trim()}
                         style={{
                           padding: "9px 16px",
