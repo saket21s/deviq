@@ -2845,7 +2845,53 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
     loadConnectedAccounts();
   }, [user.email]);
   
+  // Listen for GitHub account connection
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      
+      if (event.data.type === 'GITHUB_CONNECTED') {
+        setAccountSaveMessage({ text: '✓ GitHub connected successfully', type: 'success' });
+        
+        // Reload connected accounts
+        try {
+          const resp = await fetch(`${BACKEND}/accounts/connected`, {
+            credentials: "include",
+            headers: { "Content-Type": "application/json" }
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            setConnectedAccounts(data.accounts || []);
+          }
+        } catch (err) {
+          console.error("Failed to reload connected accounts:", err);
+        }
+        
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+      }
+    };
+    
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+  
   const handleConnectAccount = async (platform: string, username: string) => {
+    // For GitHub, use OAuth
+    if (platform === 'github') {
+      const state = Math.random().toString(36).substring(7);
+      localStorage.setItem('github_connect_state', state);
+      localStorage.setItem('github_connect_action', 'connect_account');
+      const githubAuthUrl = `https://github.com/login/oauth/authorize?${new URLSearchParams({
+        client_id: GITHUB_CLIENT_ID,
+        redirect_uri: `${window.location.origin}/auth/callback/github`,
+        scope: "read:user user:email",
+        state
+      })}`;
+      window.location.href = githubAuthUrl;
+      return;
+    }
+    
+    // For LeetCode and Codeforces, store username
     if (!username.trim()) {
       setAccountSaveMessage({ text: `Please enter your ${platform} username`, type: "error" });
       setTimeout(() => setAccountSaveMessage(null), 3000);
@@ -2886,6 +2932,18 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
       setTimeout(() => setAccountSaveMessage(null), 3000);
     } finally {
       setConnectingPlatform(null);
+    }
+  };
+  
+  const handleManageAccount = (platform: string, username: string) => {
+    const urls: {[key: string]: string} = {
+      github: `https://github.com/${username}`,
+      leetcode: `https://leetcode.com/${username}`,
+      codeforces: `https://codeforces.com/profile/${username}`
+    };
+    const url = urls[platform];
+    if (url) {
+      window.open(url, '_blank');
     }
   };
   
@@ -3129,6 +3187,26 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          handleManageAccount(field.platform, connection.platform_username);
+                        }}
+                        style={{
+                          padding: "9px 16px",
+                          borderRadius: 7,
+                          border: `1px solid ${tk.blueBorder}`,
+                          background: tk.blue,
+                          color: "#fff",
+                          cursor: "pointer",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          fontFamily: "inherit"
+                        }}
+                      >
+                        Manage
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
                           handleDisconnectAccount(field.platform);
                         }}
                         disabled={isConnecting}
@@ -3150,45 +3228,48 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                     </div>
                   ) : (
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        value={field.value}
-                        onChange={e => field.set(e.target.value)}
-                        placeholder={field.placeholder}
-                        type="text"
-                        style={{
-                          flex: 1,
-                          padding: "9px 12px",
-                          borderRadius: 8,
-                          border: `1px solid ${tk.border}`,
-                          background: tk.bgAlt,
-                          color: tk.text,
-                          fontSize: 13,
-                          outline: "none",
-                          fontFamily: "inherit",
-                          boxSizing: "border-box" as const
-                        }}
-                      />
+                      {field.platform !== 'github' && (
+                        <input
+                          value={field.value}
+                          onChange={e => field.set(e.target.value)}
+                          placeholder={field.placeholder}
+                          type="text"
+                          style={{
+                            flex: 1,
+                            padding: "9px 12px",
+                            borderRadius: 8,
+                            border: `1px solid ${tk.border}`,
+                            background: tk.bgAlt,
+                            color: tk.text,
+                            fontSize: 13,
+                            outline: "none",
+                            fontFamily: "inherit",
+                            boxSizing: "border-box" as const
+                          }}
+                        />
+                      )}
                       <button
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
                           handleConnectAccount(field.platform, field.value);
                         }}
-                        disabled={isConnecting || !field.value.trim()}
+                        disabled={isConnecting || (field.platform !== 'github' && !field.value.trim())}
                         style={{
                           padding: "9px 16px",
                           borderRadius: 7,
                           border: `1px solid ${tk.blueBorder}`,
-                          background: (isConnecting || !field.value.trim()) ? tk.track : tk.blue,
+                          background: (isConnecting || (field.platform !== 'github' && !field.value.trim())) ? tk.track : tk.blue,
                           color: "#fff",
-                          cursor: (isConnecting || !field.value.trim()) ? "not-allowed" : "pointer",
+                          cursor: (isConnecting || (field.platform !== 'github' && !field.value.trim())) ? "not-allowed" : "pointer",
                           fontSize: 11,
                           fontWeight: 600,
                           fontFamily: "inherit",
-                          opacity: (isConnecting || !field.value.trim()) ? 0.5 : 1
+                          opacity: (isConnecting || (field.platform !== 'github' && !field.value.trim())) ? 0.5 : 1,
+                          flex: field.platform === 'github' ? 1 : 'none'
                         }}
                       >
-                        {isConnecting ? "Connecting..." : "Connect"}
+                        {isConnecting ? "Connecting..." : (field.platform === 'github' ? "Connect with GitHub" : "Connect")}
                       </button>
                     </div>
                   )}

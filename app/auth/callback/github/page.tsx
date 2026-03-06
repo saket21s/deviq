@@ -12,6 +12,8 @@ function GitHubCallbackInner() {
     const state = params.get("state");
     const error = params.get("error");
     const storedState = sessionStorage.getItem("oauth_state");
+    const connectState = localStorage.getItem("github_connect_state");
+    const connectAction = localStorage.getItem("github_connect_action");
 
     if (error) {
       window.opener?.postMessage(
@@ -29,6 +31,62 @@ function GitHubCallbackInner() {
       window.close();
       return;
     }
+    
+    // Check if this is a connect account flow
+    if (connectAction === 'connect_account' && state === connectState) {
+      localStorage.removeItem("github_connect_state");
+      localStorage.removeItem("github_connect_action");
+      
+      fetch("/api/auth/github", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      })
+        .then(async (r) => {
+          const data = await r.json();
+          if (!r.ok || data?.error) {
+            throw new Error(data?.error || "GitHub OAuth failed");
+          }
+          return data;
+        })
+        .then(async (data) => {
+          // Connect the GitHub account
+          const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+          const connectResp = await fetch(`${BACKEND}/accounts/connect/github`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              username: data.login || data.name,
+              access_token: data.access_token,
+              metadata: { 
+                name: data.name,
+                email: data.email,
+                avatar_url: data.avatar || data.avatar_url
+              }
+            })
+          });
+          
+          if (connectResp.ok) {
+            window.opener?.postMessage(
+              { type: "GITHUB_CONNECTED", username: data.login || data.name },
+              window.location.origin
+            );
+          } else {
+            throw new Error("Failed to connect GitHub account");
+          }
+        })
+        .catch((err) => {
+          window.opener?.postMessage(
+            { type: "OAUTH_ERROR", message: err.message },
+            window.location.origin
+          );
+        })
+        .finally(() => window.close());
+      return;
+    }
+    
+    // Regular login flow
     if (state !== storedState) {
       window.opener?.postMessage(
         { type: "OAUTH_ERROR", message: "State mismatch." },
