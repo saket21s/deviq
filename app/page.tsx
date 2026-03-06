@@ -24,6 +24,13 @@ const LINKEDIN_CLIENT_ID = process.env.NEXT_PUBLIC_LINKEDIN_CLIENT_ID ?? "";
 type Theme = typeof THEMES.light;
 type Page = "home" | "analyze" | "compare" | "profile" | "settings" | "history" | "following" | "chat" | "practice";
 interface AuthUser { name: string; email: string; avatar?: string; provider?: "google" | "github" | "email"; }
+interface ConnectedAccount {
+  platform: string;
+  platform_username: string;
+  is_active: boolean;
+  connected_at: string;
+  last_synced_at: string;
+}
 interface StepItem { label: string; status: "pending" | "active" | "done" | "error"; }
 interface RepoItem { name: string; stars: number; forks: number; language?: string; }
 interface GithubAnalytics {
@@ -1749,7 +1756,43 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
 /* ─────────────────────────────────────────────────
    PROFILE PAGE
 ───────────────────────────────────────────────── */
-function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean; onNavigate: (p: Page) => void }) {
+function ProfilePage({ 
+  user, 
+  profile, 
+  tk, 
+  isMobile, 
+  onNavigate,
+  connectedAccounts,
+  connectingPlatform,
+  accountSaveMessage,
+  githubUsername,
+  leetcodeUsername,
+  codeforcesUsername,
+  onGithubUsernameChange,
+  onLeetcodeUsernameChange,
+  onCodeforcesUsernameChange,
+  onConnectAccount,
+  onManageAccount,
+  onDisconnectAccount
+}: { 
+  user: AuthUser; 
+  profile: UserProfile | null; 
+  tk: Theme; 
+  isMobile: boolean; 
+  onNavigate: (p: Page) => void;
+  connectedAccounts: ConnectedAccount[];
+  connectingPlatform: string | null;
+  accountSaveMessage: { text: string; type: "success" | "error" } | null;
+  githubUsername: string;
+  leetcodeUsername: string;
+  codeforcesUsername: string;
+  onGithubUsernameChange: (val: string) => void;
+  onLeetcodeUsernameChange: (val: string) => void;
+  onCodeforcesUsernameChange: (val: string) => void;
+  onConnectAccount: (platform: string) => void;
+  onManageAccount: (platform: string) => void;
+  onDisconnectAccount: (platform: string) => void;
+}) {
   const [avatarFailed, setAvatarFailed] = useState(false);
   
   // Reset avatarFailed when user changes
@@ -1832,151 +1875,129 @@ function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUs
           <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
             <div style={{ padding: "12px 18px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3 }}>Platform Connections</span>
-              {accountSaveMessage && (
-                <span style={{ fontSize: 10, fontWeight: 600, color: accountSaveMessage.type === 'success' ? tk.green : tk.rose }}>
-                  {accountSaveMessage.text}
-                </span>
-              )}
             </div>
-            {[
-              { label: "GitHub", platform: "github", value: githubUsername, set: setGithubUsername, placeholder: "your-github-username", desc: "Code repositories & contribution activity", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder },
-              { label: "LeetCode", platform: "leetcode", value: leetcodeUsername, set: setLeetcodeUsername, placeholder: "your-leetcode-username", desc: "Coding challenge rankings & stats", color: tk.amber, bg: tk.amberLight, border: tk.amberBorder },
-              { label: "Codeforces", platform: "codeforces", value: codeforcesHandle, set: setCodeforcesHandle, placeholder: "your-codeforces-handle", desc: "Competitive programming rating", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder }
-            ].map((plt, i, arr) => {
-              const connection = connectedAccounts.find(acc => acc.platform === plt.platform && acc.is_active);
-              const isConnected = !!connection;
+            {accountSaveMessage && (
+              <div style={{ margin: "12px 18px 0", padding: "10px 12px", borderRadius: 6, background: accountSaveMessage.type === "success" ? tk.greenLight : tk.roseLight, border: `1px solid ${accountSaveMessage.type === "success" ? tk.greenBorder : tk.roseBorder}`, fontSize: 11, color: accountSaveMessage.type === "success" ? tk.green : tk.rose, fontWeight: 500 }}>
+                {accountSaveMessage.text}
+              </div>
+            )}
+            {([
+              { name: "GitHub", platform: "github", desc: "Code repositories & contribution activity", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder }, 
+              { name: "LeetCode", platform: "leetcode", desc: "Coding challenge rankings & stats", color: tk.amber, bg: tk.amberLight, border: tk.amberBorder }, 
+              { name: "Codeforces", platform: "codeforces", desc: "Competitive programming rating", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder }
+            ]).map((plt, i, arr) => {
+              const account = connectedAccounts.find(a => a.platform === plt.platform && a.is_active);
+              const isConnected = !!account;
               const isConnecting = connectingPlatform === plt.platform;
               
               return (
-                <div key={plt.label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 18px", borderBottom: i < arr.length - 1 ? `1px solid ${tk.border}` : "none", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1 }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 8, background: plt.bg, border: `1px solid ${plt.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <PlatformIcon platform={plt.platform as "github" | "leetcode" | "codeforces"} size={16} color={plt.color} />
+                <div key={plt.name} style={{ padding: "13px 18px", borderBottom: i < arr.length - 1 ? `1px solid ${tk.border}` : "none", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: isConnected ? 0 : 10 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: 8, background: plt.bg, border: `1px solid ${plt.border}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <PlatformIcon platform={plt.platform as any} size={16} color={plt.color} />
                     </div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 2 }}>{plt.label}</div>
-                      <div style={{ fontSize: 11, color: tk.text3 }}>
-                        {isConnected ? `@${connection.platform_username}` : plt.desc}
-                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>{plt.name}</div>
+                      <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{plt.desc}</div>
+                      {isConnected && (
+                        <div style={{ fontSize: 11, color: tk.green, marginTop: 4, fontWeight: 500, display: "flex", alignItems: "center", gap: 4 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: "50%", background: tk.green }} />
+                          Connected as {account.platform_username}
+                        </div>
+                      )}
                     </div>
                   </div>
                   
-                  {isConnected ? (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleManageAccount(plt.platform, connection.platform_username);
-                        }}
-                        style={{
-                          padding: "5px 12px",
-                          borderRadius: 6,
-                          border: `1px solid ${tk.blueBorder}`,
-                          background: tk.blue,
-                          color: "#fff",
-                          cursor: "pointer",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          fontFamily: "inherit"
-                        }}
-                      >
-                        Manage
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleDisconnectAccount(plt.platform);
-                        }}
+                  {/* Show input field for LeetCode/Codeforces when not connected */}
+                  {!isConnected && plt.platform !== "github" && (
+                    <div style={{ marginBottom: 10 }}>
+                      <input 
+                        type="text"
+                        value={plt.platform === "leetcode" ? leetcodeUsername : codeforcesUsername}
+                        onChange={(e) => plt.platform === "leetcode" ? onLeetcodeUsernameChange(e.target.value) : onCodeforcesUsernameChange(e.target.value)}
+                        placeholder={`Enter your ${plt.name} username`}
                         disabled={isConnecting}
-                        style={{
-                          padding: "5px 12px",
-                          borderRadius: 6,
-                          border: `1px solid ${tk.border}`,
-                          background: "transparent",
-                          color: tk.text3,
-                          cursor: isConnecting ? "wait" : "pointer",
-                          fontSize: 11,
-                          fontWeight: 600,
+                        style={{ 
+                          width: "100%", 
+                          padding: "8px 12px", 
+                          borderRadius: 6, 
+                          border: `1px solid ${tk.border}`, 
+                          background: tk.bgAlt, 
+                          color: tk.text, 
+                          fontSize: 12, 
+                          outline: "none", 
                           fontFamily: "inherit",
-                          opacity: isConnecting ? 0.5 : 1
+                          opacity: isConnecting ? 0.6 : 1
                         }}
-                      >
-                        {isConnecting ? "..." : "✕"}
-                      </button>
+                      />
                     </div>
-                  ) : (
-                    plt.platform === 'github' ? (
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleConnectAccount(plt.platform, '');
-                        }}
-                        disabled={isConnecting}
-                        style={{
-                          padding: "5px 12px",
-                          borderRadius: 6,
-                          border: `1px solid ${tk.border}`,
-                          background: "transparent",
-                          cursor: isConnecting ? "wait" : "pointer",
-                          fontSize: 11,
-                          fontWeight: 600,
-                          color: tk.text3,
-                          transition: "all 0.15s",
-                          fontFamily: "inherit",
-                          opacity: isConnecting ? 0.5 : 1
-                        }}
-                      >
-                        {isConnecting ? "Connecting..." : "Connect"}
-                      </button>
-                    ) : (
-                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <input
-                          value={plt.value}
-                          onChange={e => plt.set(e.target.value)}
-                          placeholder="username"
-                          type="text"
-                          style={{
-                            width: 120,
-                            padding: "5px 8px",
-                            borderRadius: 6,
-                            border: `1px solid ${tk.border}`,
-                            background: tk.bgAlt,
-                            color: tk.text,
-                            fontSize: 11,
-                            outline: "none",
-                            fontFamily: "inherit"
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleConnectAccount(plt.platform, plt.value);
-                          }}
-                          disabled={isConnecting || !plt.value.trim()}
-                          style={{
-                            padding: "5px 12px",
-                            borderRadius: 6,
-                            border: `1px solid ${tk.border}`,
-                            background: (isConnecting || !plt.value.trim()) ? tk.track : "transparent",
-                            cursor: (isConnecting || !plt.value.trim()) ? "not-allowed" : "pointer",
-                            fontSize: 11,
-                            fontWeight: 600,
-                            color: tk.text3,
-                            transition: "all 0.15s",
+                  )}
+                  
+                  {/* Action buttons */}
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    {isConnected ? (
+                      <>
+                        <button 
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onManageAccount(plt.platform); }}
+                          disabled={isConnecting}
+                          style={{ 
+                            padding: "5px 12px", 
+                            borderRadius: 6, 
+                            border: `1px solid ${tk.border}`, 
+                            background: "transparent", 
+                            cursor: isConnecting ? "not-allowed" : "pointer", 
+                            fontSize: 11, 
+                            fontWeight: 600, 
+                            color: tk.blue, 
+                            transition: "all 0.15s", 
                             fontFamily: "inherit",
-                            opacity: (isConnecting || !plt.value.trim()) ? 0.5 : 1
+                            opacity: isConnecting ? 0.5 : 1
                           }}
                         >
-                          {isConnecting ? "..." : "Connect"}
+                          Manage →
                         </button>
-                      </div>
-                    )
-                  )}
+                        <button 
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDisconnectAccount(plt.platform); }}
+                          disabled={isConnecting}
+                          style={{ 
+                            padding: "5px 12px", 
+                            borderRadius: 6, 
+                            border: `1px solid ${tk.roseBorder}`, 
+                            background: "transparent", 
+                            cursor: isConnecting ? "not-allowed" : "pointer", 
+                            fontSize: 11, 
+                            fontWeight: 600, 
+                            color: tk.rose, 
+                            transition: "all 0.15s", 
+                            fontFamily: "inherit",
+                            opacity: isConnecting ? 0.5 : 1
+                          }}
+                        >
+                          {isConnecting ? "Disconnecting..." : "Disconnect"}
+                        </button>
+                      </>
+                    ) : (
+                      <button 
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onConnectAccount(plt.platform); }}
+                        disabled={isConnecting}
+                        style={{ 
+                          padding: "5px 12px", 
+                          borderRadius: 6, 
+                          border: `1px solid ${plt.border}`, 
+                          background: plt.bg, 
+                          cursor: isConnecting ? "not-allowed" : "pointer", 
+                          fontSize: 11, 
+                          fontWeight: 600, 
+                          color: plt.color, 
+                          transition: "all 0.15s", 
+                          fontFamily: "inherit",
+                          opacity: isConnecting ? 0.5 : 1
+                        }}
+                      >
+                        {isConnecting ? "Connecting..." : `Connect ${plt.name}`}
+                      </button>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -2913,11 +2934,56 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
 /* ─────────────────────────────────────────────────
    SETTINGS PAGE
 ───────────────────────────────────────────────── */
-function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogout, onDeleteAccount, onProfileSave, onProfileSaveStrict, onSyncNow, onPullLatest }: {
-  user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean; dark: boolean;
-  onDarkToggle: () => void; onLogout: () => void; onDeleteAccount: () => void; onProfileSave: (p: UserProfile) => void;
+function SettingsPage({ 
+  user, 
+  profile, 
+  tk, 
+  isMobile, 
+  dark, 
+  onDarkToggle, 
+  onLogout, 
+  onDeleteAccount, 
+  onProfileSave, 
+  onProfileSaveStrict, 
+  onSyncNow, 
+  onPullLatest,
+  connectedAccounts,
+  connectingPlatform,
+  accountSaveMessage: externalAccountSaveMessage,
+  githubUsername: externalGithubUsername,
+  leetcodeUsername: externalLeetcodeUsername,
+  codeforcesUsername: externalCodeforcesUsername,
+  onGithubUsernameChange,
+  onLeetcodeUsernameChange,
+  onCodeforcesUsernameChange,
+  onConnectAccount,
+  onManageAccount,
+  onDisconnectAccount
+}: {
+  user: AuthUser; 
+  profile: UserProfile | null; 
+  tk: Theme; 
+  isMobile: boolean; 
+  dark: boolean;
+  onDarkToggle: () => void; 
+  onLogout: () => void; 
+  onDeleteAccount: () => void; 
+  onProfileSave: (p: UserProfile) => void;
   onProfileSaveStrict: (p: UserProfile) => Promise<void>;
-  onSyncNow: () => Promise<void>; onPullLatest: () => Promise<void>;
+  onSyncNow: () => Promise<void>; 
+  onPullLatest: () => Promise<void>;
+  connectedAccounts: ConnectedAccount[];
+  connectingPlatform: string | null;
+  accountSaveMessage: { text: string; type: "success" | "error" } | null;
+  githubUsername: string;
+  leetcodeUsername: string;
+  codeforcesUsername: string;
+  onGithubUsernameChange: (val: string) => void;
+  onLeetcodeUsernameChange: (val: string) => void;
+  onCodeforcesUsernameChange: (val: string) => void;
+  onConnectAccount: (platform: string) => void;
+  onManageAccount: (platform: string) => void;
+  onDisconnectAccount: (platform: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<"account" | "appearance" | "notifications" | "privacy">("account");
   const p = profile;
@@ -2925,221 +2991,45 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const [bio, setBio] = useState(p?.bio || "");
   const [website, setWebsite] = useState(p?.website || "");
   const [location, setLocation] = useState(p?.location || "");
-  const [githubUsername, setGithubUsername] = useState(p?.githubUsername || "");
-  const [leetcodeUsername, setLeetcodeUsername] = useState(p?.leetcodeUsername || "");
-  const [codeforcesHandle, setCodeforcesHandle] = useState(p?.codeforcesHandle || "");
   const [saved, setSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{text: string; type: 'success' | 'error'} | null>(null);
   const [savingAccount, setSavingAccount] = useState(false);
-  const [accountSaveMessage, setAccountSaveMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [internalAccountSaveMessage, setInternalAccountSaveMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [saveHover, setSaveHover] = useState(false);
   
-  // Connected accounts state
-  interface ConnectedAccount {
-    platform: string;
-    platform_username: string;
-    is_active: boolean;
-    connected_at: string;
-    last_synced_at: string;
-  }
-  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
-  const [loadingAccounts, setLoadingAccounts] = useState(false);
-  const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
+  // Use external account save message if provided, otherwise use internal
+  const accountSaveMessage = externalAccountSaveMessage || internalAccountSaveMessage;
 
   useEffect(() => {
     setDisplayName(p?.displayName || user.name);
     setBio(p?.bio || "");
     setWebsite(p?.website || "");
     setLocation(p?.location || "");
-    setGithubUsername(p?.githubUsername || "");
-    setLeetcodeUsername(p?.leetcodeUsername || "");
-    setCodeforcesHandle(p?.codeforcesHandle || "");
-  }, [user.email, p?.displayName, p?.bio, p?.website, p?.location, p?.githubUsername, p?.leetcodeUsername, p?.codeforcesHandle]);
+  }, [user.email, p?.displayName, p?.bio, p?.website, p?.location]);
   
-  // Load connected accounts on mount
-  useEffect(() => {
-    const loadConnectedAccounts = async () => {
-      if (!user.email) return;
-      setLoadingAccounts(true);
-      try {
-        const resp = await fetch(`${BACKEND}/accounts/connected`, {
-          credentials: "include",
-          headers: { "Content-Type": "application/json" }
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          setConnectedAccounts(data.accounts || []);
-        }
-      } catch (err) {
-        console.error("Failed to load connected accounts:", err);
-      } finally {
-        setLoadingAccounts(false);
-      }
-    };
-    loadConnectedAccounts();
-  }, [user.email]);
-  
-  // Listen for GitHub account connection
-  useEffect(() => {
-    const handleMessage = async (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      
-      if (event.data.type === 'GITHUB_CONNECTED') {
-        setAccountSaveMessage({ text: '✓ GitHub connected successfully', type: 'success' });
-        
-        // Reload connected accounts
-        try {
-          const resp = await fetch(`${BACKEND}/accounts/connected`, {
-            credentials: "include",
-            headers: { "Content-Type": "application/json" }
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            setConnectedAccounts(data.accounts || []);
-          }
-        } catch (err) {
-          console.error("Failed to reload connected accounts:", err);
-        }
-        
-        setTimeout(() => setAccountSaveMessage(null), 3000);
-      }
-    };
-    
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-  
-  const handleConnectAccount = async (platform: string, username: string) => {
-    // For GitHub, use OAuth
-    if (platform === 'github') {
-      const state = Math.random().toString(36).substring(7);
-      localStorage.setItem('github_connect_state', state);
-      localStorage.setItem('github_connect_action', 'connect_account');
-      const githubAuthUrl = `https://github.com/login/oauth/authorize?${new URLSearchParams({
-        client_id: GITHUB_CLIENT_ID,
-        redirect_uri: `${window.location.origin}/auth/callback/github`,
-        scope: "read:user user:email",
-        state
-      })}`;
-      window.location.href = githubAuthUrl;
-      return;
-    }
-    
-    // For LeetCode and Codeforces, store username
-    if (!username.trim()) {
-      setAccountSaveMessage({ text: `Please enter your ${platform} username`, type: "error" });
-      setTimeout(() => setAccountSaveMessage(null), 3000);
-      return;
-    }
-    
-    setConnectingPlatform(platform);
-    try {
-      const resp = await fetch(`${BACKEND}/accounts/connect/${platform}`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim() })
-      });
-      
-      if (resp.ok) {
-        const data = await resp.json();
-        setAccountSaveMessage({ text: `✓ ${platform} connected successfully`, type: "success" });
-        
-        // Reload connected accounts
-        const accountsResp = await fetch(`${BACKEND}/accounts/connected`, {
-          credentials: "include",
-          headers: { "Content-Type": "application/json" }
-        });
-        if (accountsResp.ok) {
-          const accountsData = await accountsResp.json();
-          setConnectedAccounts(accountsData.accounts || []);
-        }
-        
-        setTimeout(() => setAccountSaveMessage(null), 3000);
-      } else {
-        setAccountSaveMessage({ text: `Failed to connect ${platform}`, type: "error" });
-        setTimeout(() => setAccountSaveMessage(null), 3000);
-      }
-    } catch (err) {
-      console.error(`Failed to connect ${platform}:`, err);
-      setAccountSaveMessage({ text: `Error connecting ${platform}`, type: "error" });
-      setTimeout(() => setAccountSaveMessage(null), 3000);
-    } finally {
-      setConnectingPlatform(null);
-    }
-  };
-  
-  const handleManageAccount = (platform: string, username: string) => {
-    const urls: {[key: string]: string} = {
-      github: `https://github.com/${username}`,
-      leetcode: `https://leetcode.com/${username}`,
-      codeforces: `https://codeforces.com/profile/${username}`
-    };
-    const url = urls[platform];
-    if (url) {
-      window.open(url, '_blank');
-    }
-  };
-  
-  const handleDisconnectAccount = async (platform: string) => {
-    setConnectingPlatform(platform);
-    try {
-      const resp = await fetch(`${BACKEND}/accounts/disconnect/${platform}`, {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" }
-      });
-      
-      if (resp.ok) {
-        setAccountSaveMessage({ text: `${platform} disconnected`, type: "success" });
-        
-        // Reload connected accounts
-        const accountsResp = await fetch(`${BACKEND}/accounts/connected`, {
-          credentials: "include",
-          headers: { "Content-Type": "application/json" }
-        });
-        if (accountsResp.ok) {
-          const accountsData = await accountsResp.json();
-          setConnectedAccounts(accountsData.accounts || []);
-        }
-        
-        setTimeout(() => setAccountSaveMessage(null), 3000);
-      } else {
-        setAccountSaveMessage({ text: `Failed to disconnect ${platform}`, type: "error" });
-        setTimeout(() => setAccountSaveMessage(null), 3000);
-      }
-    } catch (err) {
-      console.error(`Failed to disconnect ${platform}:`, err);
-      setAccountSaveMessage({ text: `Error disconnecting ${platform}`, type: "error" });
-      setTimeout(() => setAccountSaveMessage(null), 3000);
-    } finally {
-      setConnectingPlatform(null);
-    }
-  };
-
   const NOTIF_KEY = `deviq_notif_${user.email}`;
   const PRIVACY_KEY = `deviq_priv_${user.email}`;
   const [notifs, setNotifs] = useState(() => { try { const s = localStorage.getItem(NOTIF_KEY); return s ? JSON.parse(s) : { weekly: true, tips: false, product: true }; } catch { return { weekly: true, tips: false, product: true }; } });
   const [privacy, setPrivacy] = useState(() => { try { const s = localStorage.getItem(PRIVACY_KEY); return s ? JSON.parse(s) : { publicProfile: true, showEmail: false, analytics: true }; } catch { return { publicProfile: true, showEmail: false, analytics: true }; } });
 
   const handleSaveAccount = async () => {
-    console.log('💾 Save button clicked. Current state:', { displayName, bio, website, location, githubUsername, leetcodeUsername, codeforcesHandle });
-    const updated: UserProfile = { ...(p || { joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }), displayName: displayName.trim() || user.name, bio: bio.trim(), website: website.trim(), location: location.trim(), githubUsername: githubUsername.trim(), leetcodeUsername: leetcodeUsername.trim(), codeforcesHandle: codeforcesHandle.trim() };
-    console.log('📤 Updated profile object:', { displayName: updated.displayName, bio: updated.bio, website: updated.website, location: updated.location, githubUsername: updated.githubUsername, leetcodeUsername: updated.leetcodeUsername, codeforcesHandle: updated.codeforcesHandle });
+    console.log('💾 Save button clicked. Current state:', { displayName, bio, website, location });
+    const updated: UserProfile = { ...(p || { joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }), displayName: displayName.trim() || user.name, bio: bio.trim(), website: website.trim(), location: location.trim() };
+    console.log('📤 Updated profile object:', { displayName: updated.displayName, bio: updated.bio, website: updated.website, location: updated.location });
     setSavingAccount(true);
-    setAccountSaveMessage(null);
+    setInternalAccountSaveMessage(null);
     try {
       await onProfileSaveStrict(updated);
       setSaved(true);
-      setAccountSaveMessage({ text: "✓ Profile saved successfully", type: "success" });
+      setInternalAccountSaveMessage({ text: "✓ Profile saved successfully", type: "success" });
       setTimeout(() => setSaved(false), 2500);
-      setTimeout(() => setAccountSaveMessage(null), 3500);
+      setTimeout(() => setInternalAccountSaveMessage(null), 3500);
     } catch {
-      setAccountSaveMessage({ text: "✗ Failed to save profile. Please try again.", type: "error" });
-      setTimeout(() => setAccountSaveMessage(null), 4000);
+      setInternalAccountSaveMessage({ text: "✗ Failed to save profile. Please try again.", type: "error" });
+      setTimeout(() => setInternalAccountSaveMessage(null), 4000);
     } finally {
       setSavingAccount(false);
     }
@@ -3742,6 +3632,179 @@ export default function Page() {
   useEffect(() => { try { sessionStorage.setItem("deviq_cf", cf); } catch { } }, [cf]);
   useEffect(() => { try { if (data) sessionStorage.setItem("deviq_data", JSON.stringify(data)); else sessionStorage.removeItem("deviq_data"); } catch { } }, [data]);
 
+  // Connected accounts state (shared between ProfilePage and SettingsPage)
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
+  const [accountSaveMessage, setAccountSaveMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [githubUsername, setGithubUsername] = useState("");
+  const [leetcodeUsername, setLeetcodeUsername] = useState("");
+  const [codeforcesUsername, setCodeforcesUsername] = useState("");
+
+  // Load connected accounts when user logs in
+  useEffect(() => {
+    const loadConnectedAccounts = async () => {
+      if (!user) {
+        setConnectedAccounts([]);
+        return;
+      }
+      setLoadingAccounts(true);
+      try {
+        const response = await serverRequest('/accounts/connected');
+        if (response.ok) {
+          const data = await response.json();
+          setConnectedAccounts(data.accounts || []);
+        }
+      } catch (err) {
+        console.error('Failed to load connected accounts:', err);
+      } finally {
+        setLoadingAccounts(false);
+      }
+    };
+    loadConnectedAccounts();
+  }, [user]);
+
+  // Listen for GitHub OAuth connection success
+  useEffect(() => {
+    const handleGitHubConnected = async (event: MessageEvent) => {
+      if (event.data === 'GITHUB_CONNECTED') {
+        console.log('✅ GitHub account connected successfully');
+        setAccountSaveMessage({ text: '✓ GitHub account connected', type: 'success' });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+        setConnectingPlatform(null);
+        // Reload connected accounts
+        try {
+          const response = await serverRequest('/accounts/connected');
+          if (response.ok) {
+            const data = await response.json();
+            setConnectedAccounts(data.accounts || []);
+          }
+        } catch (err) {
+          console.error('Failed to reload connected accounts:', err);
+        }
+      }
+    };
+    window.addEventListener('message', handleGitHubConnected);
+    return () => window.removeEventListener('message', handleGitHubConnected);
+  }, []);
+
+  const handleConnectAccount = async (platform: string) => {
+    if (!user) {
+      setAccountSaveMessage({ text: 'Please log in first', type: 'error' });
+      setTimeout(() => setAccountSaveMessage(null), 3000);
+      return;
+    }
+
+    setConnectingPlatform(platform);
+    setAccountSaveMessage(null);
+
+    try {
+      if (platform === 'github') {
+        // Use GitHub OAuth
+        const state = Math.random().toString(36).substring(7);
+        localStorage.setItem('github_oauth_state', state);
+        localStorage.setItem('github_connect_action', 'connect');
+        const redirectUri = `${window.location.origin}/auth/callback/github`;
+        const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email read:user&state=${state}`;
+        window.open(githubAuthUrl, 'GitHub Login', 'width=600,height=700');
+        return;
+      }
+
+      // For LeetCode and Codeforces, use manual username entry
+      let username = '';
+      if (platform === 'leetcode') {
+        username = leetcodeUsername.trim();
+      } else if (platform === 'codeforces') {
+        username = codeforcesUsername.trim();
+      }
+
+      if (!username) {
+        setAccountSaveMessage({ text: `Please enter your ${platform} username`, type: 'error' });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+        setConnectingPlatform(null);
+        return;
+      }
+
+      const response = await serverRequest(`/accounts/connect/${platform}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username })
+      });
+
+      if (response.ok) {
+        setAccountSaveMessage({ text: `✓ ${platform} account connected`, type: 'success' });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+        // Clear username input
+        if (platform === 'leetcode') setLeetcodeUsername('');
+        if (platform === 'codeforces') setCodeforcesUsername('');
+        // Reload connected accounts
+        const refreshResponse = await serverRequest('/accounts/connected');
+        if (refreshResponse.ok) {
+          const data = await refreshResponse.json();
+          setConnectedAccounts(data.accounts || []);
+        }
+      } else {
+        const error = await response.json();
+        setAccountSaveMessage({ text: error.detail || 'Failed to connect account', type: 'error' });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error('Failed to connect account:', err);
+      setAccountSaveMessage({ text: 'Network error', type: 'error' });
+      setTimeout(() => setAccountSaveMessage(null), 3000);
+    } finally {
+      setConnectingPlatform(null);
+    }
+  };
+
+  const handleManageAccount = (platform: string) => {
+    const account = connectedAccounts.find(a => a.platform === platform && a.is_active);
+    if (!account) return;
+
+    const urls: Record<string, string> = {
+      github: `https://github.com/${account.platform_username}`,
+      leetcode: `https://leetcode.com/${account.platform_username}`,
+      codeforces: `https://codeforces.com/profile/${account.platform_username}`
+    };
+
+    const url = urls[platform];
+    if (url) window.open(url, '_blank');
+  };
+
+  const handleDisconnectAccount = async (platform: string) => {
+    if (!user) return;
+
+    setConnectingPlatform(platform);
+    setAccountSaveMessage(null);
+
+    try {
+      const response = await serverRequest(`/accounts/disconnect/${platform}`, {
+        method: 'DELETE'
+      });
+
+      if (response.ok) {
+        setAccountSaveMessage({ text: `✓ ${platform} account disconnected`, type: 'success' });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+        // Reload connected accounts
+        const refreshResponse = await serverRequest('/accounts/connected');
+        if (refreshResponse.ok) {
+          const data = await refreshResponse.json();
+          setConnectedAccounts(data.accounts || []);
+        }
+      } else {
+        const error = await response.json();
+        setAccountSaveMessage({ text: error.detail || 'Failed to disconnect account', type: 'error' });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error('Failed to disconnect account:', err);
+      setAccountSaveMessage({ text: 'Network error', type: 'error' });
+      setTimeout(() => setAccountSaveMessage(null), 3000);
+    } finally {
+      setConnectingPlatform(null);
+    }
+  };
+
   const analyze = useCallback(async () => {
     if (!gh && !lc && !cf) return;
     setLoading(true); setData(null); setErrors([]);
@@ -4184,7 +4247,25 @@ export default function Page() {
           )}
 
           {/* PROFILE */}
-          {page === "profile" && user && <ProfilePage user={user} profile={profile} tk={tk} isMobile={isMobile} onNavigate={(p) => navigate(p)} />}
+          {page === "profile" && user && <ProfilePage 
+            user={user} 
+            profile={profile} 
+            tk={tk} 
+            isMobile={isMobile} 
+            onNavigate={(p) => navigate(p)}
+            connectedAccounts={connectedAccounts}
+            connectingPlatform={connectingPlatform}
+            accountSaveMessage={accountSaveMessage}
+            githubUsername={githubUsername}
+            leetcodeUsername={leetcodeUsername}
+            codeforcesUsername={codeforcesUsername}
+            onGithubUsernameChange={setGithubUsername}
+            onLeetcodeUsernameChange={setLeetcodeUsername}
+            onCodeforcesUsernameChange={setCodeforcesUsername}
+            onConnectAccount={handleConnectAccount}
+            onManageAccount={handleManageAccount}
+            onDisconnectAccount={handleDisconnectAccount}
+          />}
           {page === "profile" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to view your profile.</div>
@@ -4193,7 +4274,32 @@ export default function Page() {
           )}
 
           {/* SETTINGS */}
-          {page === "settings" && user && <SettingsPage user={user} profile={profile} tk={tk} isMobile={isMobile} dark={dark} onDarkToggle={toggleDark} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onProfileSave={handleProfileSave} onProfileSaveStrict={handleProfileSaveStrict} onSyncNow={handleSyncNow} onPullLatest={handlePullLatest} />}
+          {page === "settings" && user && <SettingsPage 
+            user={user} 
+            profile={profile} 
+            tk={tk} 
+            isMobile={isMobile} 
+            dark={dark} 
+            onDarkToggle={toggleDark} 
+            onLogout={handleLogout} 
+            onDeleteAccount={handleDeleteAccount} 
+            onProfileSave={handleProfileSave} 
+            onProfileSaveStrict={handleProfileSaveStrict} 
+            onSyncNow={handleSyncNow} 
+            onPullLatest={handlePullLatest}
+            connectedAccounts={connectedAccounts}
+            connectingPlatform={connectingPlatform}
+            accountSaveMessage={accountSaveMessage}
+            githubUsername={githubUsername}
+            leetcodeUsername={leetcodeUsername}
+            codeforcesUsername={codeforcesUsername}
+            onGithubUsernameChange={setGithubUsername}
+            onLeetcodeUsernameChange={setLeetcodeUsername}
+            onCodeforcesUsernameChange={setCodeforcesUsername}
+            onConnectAccount={handleConnectAccount}
+            onManageAccount={handleManageAccount}
+            onDisconnectAccount={handleDisconnectAccount}
+          />}
           {page === "settings" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to access settings.</div>
