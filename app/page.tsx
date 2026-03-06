@@ -153,6 +153,7 @@ interface WeakCategory {
 interface UserProfile {
   displayName: string; bio: string; website: string; location: string; joinedAt: string;
   avatar?: string;
+  githubUsername?: string; leetcodeUsername?: string; codeforcesHandle?: string;
   analysesRun: number; comparisonsRun: number; aiInsightsRun: number;
   recentAnalyses?: AnalysisRecord[];
   following?: FollowedUser[]; followers?: string[]; notifications?: Notification[];
@@ -520,6 +521,9 @@ function mergeProfilePreferNonEmpty(remote: UserProfile, local?: UserProfile | n
     bio: (remote.bio || "").trim() || (local.bio || ""),
     website: (remote.website || "").trim() || (local.website || ""),
     location: (remote.location || "").trim() || (local.location || ""),
+    githubUsername: (remote.githubUsername || "").trim() || (local.githubUsername || ""),
+    leetcodeUsername: (remote.leetcodeUsername || "").trim() || (local.leetcodeUsername || ""),
+    codeforcesHandle: (remote.codeforcesHandle || "").trim() || (local.codeforcesHandle || ""),
     joinedAt: remote.joinedAt || local.joinedAt,
     avatar: remote.avatar || local.avatar,
     analysesRun: remote.analysesRun || local.analysesRun || 0,
@@ -540,6 +544,9 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
     bio: p.bio || "",
     website: p.website || "",
     location: p.location || "",
+    github_username: p.githubUsername || "",
+    leetcode_username: p.leetcodeUsername || "",
+    codeforces_handle: p.codeforcesHandle || "",
     profile_picture_url: p.avatar || "",
     recentAnalyses: p.recentAnalyses || [],
     following: p.following || [],
@@ -2781,6 +2788,9 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const [bio, setBio] = useState(p?.bio || "");
   const [website, setWebsite] = useState(p?.website || "");
   const [location, setLocation] = useState(p?.location || "");
+  const [githubUsername, setGithubUsername] = useState(p?.githubUsername || "");
+  const [leetcodeUsername, setLeetcodeUsername] = useState(p?.leetcodeUsername || "");
+  const [codeforcesHandle, setCodeforcesHandle] = useState(p?.codeforcesHandle || "");
   const [saved, setSaved] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -2795,7 +2805,10 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
     setBio(p?.bio || "");
     setWebsite(p?.website || "");
     setLocation(p?.location || "");
-  }, [user.email, p?.displayName, p?.bio, p?.website, p?.location]);
+    setGithubUsername(p?.githubUsername || "");
+    setLeetcodeUsername(p?.leetcodeUsername || "");
+    setCodeforcesHandle(p?.codeforcesHandle || "");
+  }, [user.email, p?.displayName, p?.bio, p?.website, p?.location, p?.githubUsername, p?.leetcodeUsername, p?.codeforcesHandle]);
 
   const NOTIF_KEY = `deviq_notif_${user.email}`;
   const PRIVACY_KEY = `deviq_priv_${user.email}`;
@@ -2803,9 +2816,9 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const [privacy, setPrivacy] = useState(() => { try { const s = localStorage.getItem(PRIVACY_KEY); return s ? JSON.parse(s) : { publicProfile: true, showEmail: false, analytics: true }; } catch { return { publicProfile: true, showEmail: false, analytics: true }; } });
 
   const handleSaveAccount = async () => {
-    console.log('💾 Save button clicked. Current state:', { displayName, bio, website, location });
-    const updated: UserProfile = { ...(p || { joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }), displayName: displayName.trim() || user.name, bio: bio.trim(), website: website.trim(), location: location.trim() };
-    console.log('📤 Updated profile object:', { displayName: updated.displayName, bio: updated.bio, website: updated.website, location: updated.location });
+    console.log('💾 Save button clicked. Current state:', { displayName, bio, website, location, githubUsername, leetcodeUsername, codeforcesHandle });
+    const updated: UserProfile = { ...(p || { joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }), displayName: displayName.trim() || user.name, bio: bio.trim(), website: website.trim(), location: location.trim(), githubUsername: githubUsername.trim(), leetcodeUsername: leetcodeUsername.trim(), codeforcesHandle: codeforcesHandle.trim() };
+    console.log('📤 Updated profile object:', { displayName: updated.displayName, bio: updated.bio, website: updated.website, location: updated.location, githubUsername: updated.githubUsername, leetcodeUsername: updated.leetcodeUsername, codeforcesHandle: updated.codeforcesHandle });
     setSavingAccount(true);
     setAccountSaveMessage(null);
     try {
@@ -2960,6 +2973,22 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
               <div key={field.label} style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
                 <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3, display: "block", marginBottom: 6 }}>{field.label}</label>
                 {field.multiline ? <textarea value={field.value} onChange={e => { console.log(`📝 ${field.label} changed to:`, e.target.value); field.set(e.target.value); }} placeholder={field.placeholder} rows={3} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", resize: "vertical" as const, boxSizing: "border-box" as const }} /> : <input value={field.value} onChange={e => { console.log(`📝 ${field.label} changed to:`, e.target.value); field.set(e.target.value); }} placeholder={field.placeholder} type="text" onKeyDown={e => e.key === "Enter" && handleSaveAccount()} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box" as const }} />}
+                <div style={{ fontSize: 11, color: tk.text3, marginTop: 5 }}>{field.desc}</div>
+              </div>
+            ))}
+            <div style={{ padding: "20px 20px 4px", borderBottom: `1px solid ${tk.border}`, background: tk.blueLight + "08" }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.blue, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"/><rect x="2" y="9" width="4" height="12"/><circle cx="4" cy="4" r="2"/></svg>
+                Connected Accounts
+              </div>
+              <div style={{ fontSize: 11, color: tk.text2, marginBottom: 14, lineHeight: 1.5 }}>
+                Link your coding platform accounts to your DevIQ profile. These will be used for personalized analysis and insights.
+              </div>
+            </div>
+            {[{ label: "GitHub Username", value: githubUsername, set: setGithubUsername, placeholder: "your-github-username", desc: "Your GitHub profile username (without @).", icon: "github" }, { label: "LeetCode Username", value: leetcodeUsername, set: setLeetcodeUsername, placeholder: "your-leetcode-username", desc: "Your LeetCode profile username.", icon: "leetcode" }, { label: "Codeforces Handle", value: codeforcesHandle, set: setCodeforcesHandle, placeholder: "your-codeforces-handle", desc: "Your Codeforces username/handle.", icon: "codeforces" }].map(field => (
+              <div key={field.label} style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
+                <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3, display: "block", marginBottom: 6 }}>{field.label}</label>
+                <input value={field.value} onChange={e => { console.log(`📝 ${field.label} changed to:`, e.target.value); field.set(e.target.value); }} placeholder={field.placeholder} type="text" onKeyDown={e => e.key === "Enter" && handleSaveAccount()} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box" as const }} />
                 <div style={{ fontSize: 11, color: tk.text3, marginTop: 5 }}>{field.desc}</div>
               </div>
             ))}
