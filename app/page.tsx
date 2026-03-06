@@ -502,8 +502,14 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
 async function apiGetProfile(): Promise<UserProfile> {
   try {
     const remote = await serverRequest('/profile');
+    console.log('📥 Loaded profile from backend:', {
+      recentAnalyses: remote.recentAnalyses?.length || 0,
+      following: remote.following?.length || 0,
+      notifications: remote.notifications?.length || 0
+    });
     return normalizeUserProfile(remote);
   } catch (err) {
+    console.error('❌ Failed to load profile from backend:', err);
     // If backend fails, this will throw and caller should use loadProfile
     throw err;
   }
@@ -525,6 +531,13 @@ async function apiSaveProfile(p: UserProfile): Promise<UserProfile> {
 
 // Helper to sync profile to both backend and localStorage
 async function syncProfile(email: string, p: UserProfile): Promise<UserProfile> {
+  console.log('🔄 Syncing profile to backend:', {
+    email,
+    recentAnalyses: p.recentAnalyses?.length || 0,
+    following: p.following?.length || 0,
+    notifications: p.notifications?.length || 0
+  });
+  
   // Save to localStorage immediately
   saveProfile(email, p);
   
@@ -538,10 +551,16 @@ async function syncProfile(email: string, p: UserProfile): Promise<UserProfile> 
     // Extract user data from response (it has {message, user} structure)
     const userData = remote.user || remote;
     const updated = normalizeUserProfile(userData, p);
+    console.log('✅ Profile synced successfully:', {
+      recentAnalyses: updated.recentAnalyses?.length || 0,
+      following: updated.following?.length || 0,
+      notifications: updated.notifications?.length || 0
+    });
     // Update localStorage with backend response
     saveProfile(email, updated);
     return updated;
-  } catch {
+  } catch (err) {
+    console.error('❌ Sync failed, trying fallback:', err);
     // Fallback to regular save endpoint
     try {
       const updated = await apiSaveProfile(p);
@@ -2862,6 +2881,7 @@ export default function Page() {
           setUser(mergedUser);
           cacheAuthUser(mergedUser);
           try {
+            // Load profile from backend (source of truth)
             const p = await apiGetProfile();
             if (!p.displayName) p.displayName = mergedUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
@@ -2871,10 +2891,9 @@ export default function Page() {
               setUser(enriched);
               cacheAuthUser(enriched);
             }
+            // Save backend data to localStorage for offline access
+            saveProfile(mergedUser.email, p);
             setProfile(p);
-            if (p.avatar && p.avatar !== profile?.avatar) {
-              syncProfile(mergedUser.email, p).catch(() => { });
-            }
           } catch {
             // fallback to localStorage profile if server fails
             const p = loadProfile(mergedUser.email);
@@ -2913,18 +2932,21 @@ export default function Page() {
     // store locally in case of offline fallback
     cacheAuthUser(mergedUser);
     try {
+      // Load profile from backend (source of truth for cross-device sync)
       const p = await apiGetProfile();
       if (!p.displayName) p.displayName = mergedUser.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
       if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
+      // Save backend data to localStorage for offline access
+      saveProfile(mergedUser.email, p);
       setProfile(p);
-      syncProfile(mergedUser.email, p).catch(() => { });
     } catch {
-      // fallback to local profile store and sync to backend
+      // Backend failed - load from localStorage and sync to backend
       const p = loadProfile(mergedUser.email);
       if (!p.displayName) p.displayName = mergedUser.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
       if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
+      // Try to sync local data to backend for future use
       syncProfile(mergedUser.email, p).then(saved => setProfile(saved)).catch(() => setProfile(p));
     }
     setAuthModal(null); setMenuOpen(false);
