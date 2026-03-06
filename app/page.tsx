@@ -555,7 +555,7 @@ async function apiGetProfile(): Promise<UserProfile> {
   }
 }
 
-async function apiSaveProfile(p: UserProfile): Promise<UserProfile> {
+async function apiSaveProfile(p: UserProfile, strict = false): Promise<UserProfile> {
   try {
     const remote = await serverRequest('/profile', {
       method: 'PUT',
@@ -564,13 +564,14 @@ async function apiSaveProfile(p: UserProfile): Promise<UserProfile> {
     });
     return normalizeUserProfile(remote, p);
   } catch (err) {
+    if (strict) throw err;
     // If backend fails, return the profile as-is (localStorage will be used by caller)
     return p;
   }
 }
 
 // Helper to sync profile to both backend and localStorage
-async function syncProfile(email: string, p: UserProfile): Promise<UserProfile> {
+async function syncProfile(email: string, p: UserProfile, strict = false): Promise<UserProfile> {
   console.log('🔄 Syncing profile to backend:', {
     email,
     recentAnalyses: p.recentAnalyses?.length || 0,
@@ -603,10 +604,11 @@ async function syncProfile(email: string, p: UserProfile): Promise<UserProfile> 
     console.error('❌ Sync failed, trying fallback:', err);
     // Fallback to regular save endpoint
     try {
-      const updated = await apiSaveProfile(p);
+      const updated = await apiSaveProfile(p, strict);
       saveProfile(email, updated);
       return updated;
-    } catch {
+    } catch (fallbackErr) {
+      if (strict) throw fallbackErr;
       // Backend unavailable, localStorage is saved
       return p;
     }
@@ -2718,9 +2720,10 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
 /* ─────────────────────────────────────────────────
    SETTINGS PAGE
 ───────────────────────────────────────────────── */
-function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogout, onDeleteAccount, onProfileSave, onSyncNow, onPullLatest }: {
+function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogout, onDeleteAccount, onProfileSave, onProfileSaveStrict, onSyncNow, onPullLatest }: {
   user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean; dark: boolean;
   onDarkToggle: () => void; onLogout: () => void; onDeleteAccount: () => void; onProfileSave: (p: UserProfile) => void;
+  onProfileSaveStrict: (p: UserProfile) => Promise<void>;
   onSyncNow: () => Promise<void>; onPullLatest: () => Promise<void>;
 }) {
   const [activeTab, setActiveTab] = useState<"account" | "appearance" | "notifications" | "privacy">("account");
@@ -2755,7 +2758,7 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
     setSavingAccount(true);
     setAccountSaveMessage(null);
     try {
-      await Promise.resolve(onProfileSave(updated));
+      await onProfileSaveStrict(updated);
       setSaved(true);
       setAccountSaveMessage({ text: "✓ Profile saved successfully", type: "success" });
       setTimeout(() => setSaved(false), 2500);
@@ -3192,6 +3195,17 @@ export default function Page() {
       setProfile(updated);
     }
     if (updated.displayName && updated.displayName !== user.name) { const u2 = { ...user, name: updated.displayName }; setUser(u2); saveSession(u2); }
+  };
+
+  const handleProfileSaveStrict = async (updated: UserProfile) => {
+    if (!user) throw new Error('Not logged in');
+    const saved = await syncProfile(user.email, updated, true);
+    setProfile(saved);
+    if (saved.displayName && saved.displayName !== user.name) {
+      const u2 = { ...user, name: saved.displayName };
+      setUser(u2);
+      saveSession(u2);
+    }
   };
 
   const handleSyncNow = async () => {
@@ -3794,7 +3808,7 @@ export default function Page() {
           )}
 
           {/* SETTINGS */}
-          {page === "settings" && user && <SettingsPage user={user} profile={profile} tk={tk} isMobile={isMobile} dark={dark} onDarkToggle={toggleDark} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onProfileSave={handleProfileSave} onSyncNow={handleSyncNow} onPullLatest={handlePullLatest} />}
+          {page === "settings" && user && <SettingsPage user={user} profile={profile} tk={tk} isMobile={isMobile} dark={dark} onDarkToggle={toggleDark} onLogout={handleLogout} onDeleteAccount={handleDeleteAccount} onProfileSave={handleProfileSave} onProfileSaveStrict={handleProfileSaveStrict} onSyncNow={handleSyncNow} onPullLatest={handlePullLatest} />}
           {page === "settings" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to access settings.</div>
