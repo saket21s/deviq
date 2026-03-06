@@ -513,7 +513,7 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
 }
 
 function toBackendProfilePayload(p: UserProfile): Record<string, any> {
-  return {
+  const payload = {
     bio: p.bio || "",
     website: p.website || "",
     location: p.location || "",
@@ -529,6 +529,8 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
     weakCategories: p.weakCategories || [],
     lastPracticeProblem: p.lastPracticeProblem,
   };
+  console.log('🔧 Payload prepared:', { bio: payload.bio, website: payload.website, location: payload.location });
+  return payload;
 }
 
 async function apiGetProfile(): Promise<UserProfile> {
@@ -574,8 +576,12 @@ async function apiSaveProfile(p: UserProfile, strict = false): Promise<UserProfi
 
 // Helper to sync profile to both backend and localStorage
 async function syncProfile(email: string, p: UserProfile, strict = false): Promise<UserProfile> {
+  const payload = toBackendProfilePayload(p);
   console.log('🔄 Syncing profile to backend:', {
     email,
+    bio: payload.bio,
+    website: payload.website,
+    location: payload.location,
     recentAnalyses: p.recentAnalyses?.length || 0,
     following: p.following?.length || 0,
     notifications: p.notifications?.length || 0
@@ -589,12 +595,22 @@ async function syncProfile(email: string, p: UserProfile, strict = false): Promi
     const remote = await serverRequest('/sync/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(toBackendProfilePayload(p)),
+      body: JSON.stringify(payload),
     });
     // Extract user data from response (it has {message, user} structure)
     const userData = remote.user || remote;
+    console.log('📊 Backend response:', {
+      user: userData,
+      hasWebsite: !!userData.website,
+      hasLocation: !!userData.location,
+      website: userData.website,
+      location: userData.location
+    });
     const updated = normalizeUserProfile(userData, p);
     console.log('✅ Profile synced successfully:', {
+      bio: updated.bio,
+      website: updated.website,
+      location: updated.location,
       recentAnalyses: updated.recentAnalyses?.length || 0,
       following: updated.following?.length || 0,
       notifications: updated.notifications?.length || 0
