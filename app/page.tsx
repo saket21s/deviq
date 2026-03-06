@@ -2734,6 +2734,9 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const [syncing, setSyncing] = useState(false);
   const [pulling, setPulling] = useState(false);
   const [syncMessage, setSyncMessage] = useState<{text: string; type: 'success' | 'error'} | null>(null);
+  const [savingAccount, setSavingAccount] = useState(false);
+  const [accountSaveMessage, setAccountSaveMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [saveHover, setSaveHover] = useState(false);
 
   useEffect(() => {
     setDisplayName(p?.displayName || user.name);
@@ -2747,9 +2750,22 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const [notifs, setNotifs] = useState(() => { try { const s = localStorage.getItem(NOTIF_KEY); return s ? JSON.parse(s) : { weekly: true, tips: false, product: true }; } catch { return { weekly: true, tips: false, product: true }; } });
   const [privacy, setPrivacy] = useState(() => { try { const s = localStorage.getItem(PRIVACY_KEY); return s ? JSON.parse(s) : { publicProfile: true, showEmail: false, analytics: true }; } catch { return { publicProfile: true, showEmail: false, analytics: true }; } });
 
-  const handleSaveAccount = () => {
+  const handleSaveAccount = async () => {
     const updated: UserProfile = { ...(p || { joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }), displayName: displayName.trim() || user.name, bio: bio.trim(), website: website.trim(), location: location.trim() };
-    onProfileSave(updated); setSaved(true); setTimeout(() => setSaved(false), 2500);
+    setSavingAccount(true);
+    setAccountSaveMessage(null);
+    try {
+      await Promise.resolve(onProfileSave(updated));
+      setSaved(true);
+      setAccountSaveMessage({ text: "✓ Profile saved successfully", type: "success" });
+      setTimeout(() => setSaved(false), 2500);
+      setTimeout(() => setAccountSaveMessage(null), 3500);
+    } catch {
+      setAccountSaveMessage({ text: "✗ Failed to save profile. Please try again.", type: "error" });
+      setTimeout(() => setAccountSaveMessage(null), 4000);
+    } finally {
+      setSavingAccount(false);
+    }
   };
 
   const handleManualSync = async () => {
@@ -2900,9 +2916,37 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                 <span style={{ padding: "9px 12px", fontSize: 11, color: tk.green, background: tk.greenLight, border: `1px solid ${tk.greenBorder}`, borderRadius: 8, fontWeight: 600, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" as const }}>✓ Verified</span>
               </div>
             </div>
-            <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" as const }}>
               <button onClick={() => setConfirmDelete(v => !v)} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${tk.roseBorder}`, background: "transparent", cursor: "pointer", fontSize: 12, color: tk.rose, fontFamily: "inherit", fontWeight: 500 }}>Delete Account</button>
-              <button onClick={handleSaveAccount} style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>Save Changes</button>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                <button
+                  onClick={handleSaveAccount}
+                  disabled={savingAccount}
+                  onMouseEnter={() => setSaveHover(true)}
+                  onMouseLeave={() => setSaveHover(false)}
+                  style={{
+                    padding: "9px 24px",
+                    borderRadius: 8,
+                    border: `1px solid ${tk.blueBorder}`,
+                    background: savingAccount ? tk.track : (saveHover ? tk.blue : tk.accent),
+                    color: savingAccount ? tk.text3 : tk.accentFg,
+                    cursor: savingAccount ? "wait" : "pointer",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    fontFamily: "inherit",
+                    boxShadow: savingAccount ? "none" : "0 6px 14px rgba(59,130,246,0.25)",
+                    transform: saveHover && !savingAccount ? "translateY(-1px)" : "translateY(0)",
+                    transition: "all 0.15s ease"
+                  }}
+                >
+                  {savingAccount ? "Saving..." : "Save Changes"}
+                </button>
+                {accountSaveMessage && (
+                  <div style={{ fontSize: 11, fontWeight: 600, color: accountSaveMessage.type === "success" ? tk.green : tk.rose }}>
+                    {accountSaveMessage.text}
+                  </div>
+                )}
+              </div>
             </div>
             {confirmDelete && (
               <div style={{ margin: "0 20px 16px", padding: "14px 16px", borderRadius: 9, background: tk.roseLight, border: `1px solid ${tk.roseBorder}` }}>
