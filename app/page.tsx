@@ -2721,7 +2721,7 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
     setBio(p?.bio || "");
     setWebsite(p?.website || "");
     setLocation(p?.location || "");
-  }, [user.email]);
+  }, [user.email, p?.displayName, p?.bio, p?.website, p?.location]);
 
   const NOTIF_KEY = `deviq_notif_${user.email}`;
   const PRIVACY_KEY = `deviq_priv_${user.email}`;
@@ -2753,14 +2753,11 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
     setSyncMessage(null);
     try {
       await onPullLatest();
-      // Update local state with pulled data
-      setDisplayName(p?.displayName || user.name);
-      setBio(p?.bio || "");
-      setWebsite(p?.website || "");
-      setLocation(p?.location || "");
+      // The useEffect above will automatically update local state when profile changes
       setSyncMessage({ text: '✓ Pulled latest from cloud! Profile updated.', type: 'success' });
       setTimeout(() => setSyncMessage(null), 4000);
     } catch (err) {
+      console.error('Pull error:', err);
       setSyncMessage({ text: '✗ Pull failed. Check your connection.', type: 'error' });
       setTimeout(() => setSyncMessage(null), 4000);
     } finally {
@@ -3114,11 +3111,19 @@ export default function Page() {
     if (!user) throw new Error('Not logged in');
     console.log('⬇️ Pulling latest profile from cloud');
     const latestProfile = await apiGetProfile();
+    console.log('📥 Pulled profile data:', {
+      bio: latestProfile.bio,
+      displayName: latestProfile.displayName,
+      website: latestProfile.website,
+      location: latestProfile.location,
+      recentAnalyses: latestProfile.recentAnalyses?.length || 0
+    });
     if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
     if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
     if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
     setProfile(latestProfile);
     saveProfile(user.email, latestProfile);
+    console.log('✅ Profile state updated');
   };
   const handleDeleteAccount = async () => { if (!user) return; try { await serverRequest('/auth/account', { method: 'DELETE' }); } catch { /* ignore */ } deleteAccount(user.email); setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home"); };
   const toggleDark = () => { setDark(d => { localStorage.setItem("deviq_dark", d ? "0" : "1"); return !d; }); };
