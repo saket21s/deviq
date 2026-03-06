@@ -543,10 +543,15 @@ async function apiGetProfile(): Promise<UserProfile> {
       throw new Error('NOT_MODIFIED'); // Signal to caller to use current data
     }
     
+    console.log('📥 Raw backend response:', remote);
+    console.log('📥 Extracted website from response:', remote?.website);
+    console.log('📥 Extracted location from response:', remote?.location);
     console.log('📥 Loaded profile from backend:', {
       recentAnalyses: remote.recentAnalyses?.length || 0,
       following: remote.following?.length || 0,
-      notifications: remote.notifications?.length || 0
+      notifications: remote.notifications?.length || 0,
+      website: remote?.website,
+      location: remote?.location
     });
     return normalizeUserProfile(remote);
   } catch (err: any) {
