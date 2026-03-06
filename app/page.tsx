@@ -3667,21 +3667,23 @@ export default function Page() {
   // Listen for GitHub OAuth connection success
   useEffect(() => {
     const handleGitHubConnected = async (event: MessageEvent) => {
-      if (event.data === 'GITHUB_CONNECTED') {
+      if (event.data?.type === 'GITHUB_CONNECTED') {
         console.log('✅ GitHub account connected successfully');
         setAccountSaveMessage({ text: '✓ GitHub account connected', type: 'success' });
         setTimeout(() => setAccountSaveMessage(null), 3000);
         setConnectingPlatform(null);
         // Reload connected accounts
         try {
-          const response = await serverRequest('/accounts/connected');
-          if (response.ok) {
-            const data = await response.json();
-            setConnectedAccounts(data.accounts || []);
-          }
+          const data = await serverRequest('/accounts/connected');
+          setConnectedAccounts(data.accounts || []);
         } catch (err) {
           console.error('Failed to reload connected accounts:', err);
         }
+      } else if (event.data?.type === 'OAUTH_ERROR') {
+        console.error('❌ OAuth error:', event.data.message);
+        setAccountSaveMessage({ text: `Error: ${event.data.message}`, type: 'error' });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+        setConnectingPlatform(null);
       }
     };
     window.addEventListener('message', handleGitHubConnected);
@@ -3701,12 +3703,23 @@ export default function Page() {
     try {
       if (platform === 'github') {
         // Use GitHub OAuth
+        if (!GITHUB_CLIENT_ID) {
+          setAccountSaveMessage({ text: 'GitHub OAuth is not configured', type: 'error' });
+          setTimeout(() => setAccountSaveMessage(null), 3000);
+          setConnectingPlatform(null);
+          return;
+        }
         const state = Math.random().toString(36).substring(7);
-        localStorage.setItem('github_oauth_state', state);
-        localStorage.setItem('github_connect_action', 'connect');
+        localStorage.setItem('github_connect_state', state);
+        localStorage.setItem('github_connect_action', 'connect_account');
         const redirectUri = `${window.location.origin}/auth/callback/github`;
-        const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email read:user&state=${state}`;
-        window.open(githubAuthUrl, 'GitHub Login', 'width=600,height=700');
+        const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email%20read:user&state=${state}`;
+        const popup = window.open(githubAuthUrl, 'GitHub Login', 'width=600,height=700');
+        if (!popup) {
+          setAccountSaveMessage({ text: 'Failed to open GitHub login popup. Check if popups are allowed.', type: 'error' });
+          setTimeout(() => setAccountSaveMessage(null), 3000);
+          setConnectingPlatform(null);
+        }
         return;
       }
 
@@ -3725,34 +3738,35 @@ export default function Page() {
         return;
       }
 
-      const response = await serverRequest(`/accounts/connect/${platform}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-      });
+      try {
+        const response = await serverRequest(`/accounts/connect/${platform}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+        });
 
-      if (response.ok) {
-        setAccountSaveMessage({ text: `✓ ${platform} account connected`, type: 'success' });
-        setTimeout(() => setAccountSaveMessage(null), 3000);
-        // Clear username input
-        if (platform === 'leetcode') setLeetcodeUsername('');
-        if (platform === 'codeforces') setCodeforcesUsername('');
-        // Reload connected accounts
-        const refreshResponse = await serverRequest('/accounts/connected');
-        if (refreshResponse.ok) {
-          const data = await refreshResponse.json();
-          setConnectedAccounts(data.accounts || []);
+        if (response) {
+          setAccountSaveMessage({ text: `✓ ${platform} account connected`, type: 'success' });
+          setTimeout(() => setAccountSaveMessage(null), 3000);
+          // Clear username input
+          if (platform === 'leetcode') setLeetcodeUsername('');
+          if (platform === 'codeforces') setCodeforcesUsername('');
+          // Reload connected accounts
+          const refreshData = await serverRequest('/accounts/connected');
+          setConnectedAccounts(refreshData.accounts || []);
         }
-      } else {
-        const error = await response.json();
-        setAccountSaveMessage({ text: error.detail || 'Failed to connect account', type: 'error' });
+      } catch (err: any) {
+        console.error('Failed to connect account:', err);
+        const errorMsg = err.message || 'Failed to connect account';
+        setAccountSaveMessage({ text: errorMsg, type: 'error' });
         setTimeout(() => setAccountSaveMessage(null), 3000);
+      } finally {
+        setConnectingPlatform(null);
       }
-    } catch (err) {
-      console.error('Failed to connect account:', err);
-      setAccountSaveMessage({ text: 'Network error', type: 'error' });
+    } catch (err: any) {
+      console.error('Error in handleConnectAccount:', err);
+      setAccountSaveMessage({ text: 'An unexpected error occurred', type: 'error' });
       setTimeout(() => setAccountSaveMessage(null), 3000);
-    } finally {
       setConnectingPlatform(null);
     }
   };
