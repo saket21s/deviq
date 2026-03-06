@@ -2821,6 +2821,9 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                 <div style={{ fontSize: 11, color: tk.blue, lineHeight: 1.5, marginBottom: 10 }}>
                   Keep your profile synced across all devices. Changes you make here will appear on other devices logged in with <strong>{user.email}</strong>
                 </div>
+                <div style={{ fontSize: 10, color: tk.blue, opacity: 0.8, marginBottom: 10, fontStyle: "italic" }}>
+                  💡 Tip: "Save Changes" button automatically syncs. Use manual buttons below for immediate control.
+                </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
                   <button onClick={handleManualSync} disabled={syncing} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: tk.blue, color: "#fff", cursor: syncing ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: syncing ? 0.6 : 1 }}>
                     {syncing ? "Syncing..." : "↑ Push to Cloud"}
