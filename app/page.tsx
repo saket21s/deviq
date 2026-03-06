@@ -512,6 +512,29 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
   };
 }
 
+function mergeProfilePreferNonEmpty(remote: UserProfile, local?: UserProfile | null): UserProfile {
+  if (!local) return remote;
+  return {
+    ...remote,
+    displayName: (remote.displayName || "").trim() || (local.displayName || ""),
+    bio: (remote.bio || "").trim() || (local.bio || ""),
+    website: (remote.website || "").trim() || (local.website || ""),
+    location: (remote.location || "").trim() || (local.location || ""),
+    joinedAt: remote.joinedAt || local.joinedAt,
+    avatar: remote.avatar || local.avatar,
+    analysesRun: remote.analysesRun || local.analysesRun || 0,
+    comparisonsRun: remote.comparisonsRun || local.comparisonsRun || 0,
+    aiInsightsRun: remote.aiInsightsRun || local.aiInsightsRun || 0,
+    recentAnalyses: (remote.recentAnalyses && remote.recentAnalyses.length > 0) ? remote.recentAnalyses : (local.recentAnalyses || []),
+    following: (remote.following && remote.following.length > 0) ? remote.following : (local.following || []),
+    followers: (remote.followers && remote.followers.length > 0) ? remote.followers : (local.followers || []),
+    notifications: (remote.notifications && remote.notifications.length > 0) ? remote.notifications : (local.notifications || []),
+    solvedProblems: (remote.solvedProblems && remote.solvedProblems.length > 0) ? remote.solvedProblems : (local.solvedProblems || []),
+    weakCategories: (remote.weakCategories && remote.weakCategories.length > 0) ? remote.weakCategories : (local.weakCategories || []),
+    lastPracticeProblem: remote.lastPracticeProblem || local.lastPracticeProblem,
+  };
+}
+
 function toBackendProfilePayload(p: UserProfile): Record<string, any> {
   const payload = {
     bio: p.bio || "",
@@ -3068,7 +3091,9 @@ export default function Page() {
           cacheAuthUser(mergedUser);
           try {
             // Load profile from backend (source of truth)
-            const p = await apiGetProfile();
+            const remoteProfile = await apiGetProfile();
+            const localProfile = loadProfile(mergedUser.email);
+            const p = mergeProfilePreferNonEmpty(remoteProfile, localProfile);
             if (!p.displayName) p.displayName = mergedUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
             if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
@@ -3153,7 +3178,8 @@ export default function Page() {
     const refreshProfile = async () => {
       try {
         console.log('🔄 Checking for profile updates from other devices...');
-        const latestProfile = await apiGetProfile();
+        const latestProfileRemote = await apiGetProfile();
+        const latestProfile = mergeProfilePreferNonEmpty(latestProfileRemote, profile || loadProfile(user.email));
         
         // Compare with current profile to see if there are changes
         const hasChanges = JSON.stringify(latestProfile) !== JSON.stringify(profile);
@@ -3196,7 +3222,9 @@ export default function Page() {
     cacheAuthUser(mergedUser);
     try {
       // Load profile from backend (source of truth for cross-device sync)
-      const p = await apiGetProfile();
+      const remoteProfile = await apiGetProfile();
+      const localProfile = loadProfile(mergedUser.email);
+      const p = mergeProfilePreferNonEmpty(remoteProfile, localProfile);
       if (!p.displayName) p.displayName = mergedUser.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
       if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
@@ -3253,7 +3281,8 @@ export default function Page() {
     if (!user) throw new Error('Not logged in');
     console.log('⬇️ Pulling latest profile from cloud');
     try {
-      const latestProfile = await apiGetProfile();
+      const latestProfileRemote = await apiGetProfile();
+      const latestProfile = mergeProfilePreferNonEmpty(latestProfileRemote, profile || loadProfile(user.email));
       console.log('📥 Pulled profile data:', {
         bio: latestProfile.bio,
         displayName: latestProfile.displayName,
