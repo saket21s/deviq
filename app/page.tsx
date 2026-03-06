@@ -515,6 +515,8 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
 function toBackendProfilePayload(p: UserProfile): Record<string, any> {
   return {
     bio: p.bio || "",
+    website: p.website || "",
+    location: p.location || "",
     profile_picture_url: p.avatar || "",
     recentAnalyses: p.recentAnalyses || [],
     following: p.following || [],
@@ -602,6 +604,9 @@ async function syncProfile(email: string, p: UserProfile, strict = false): Promi
     return updated;
   } catch (err) {
     console.error('❌ Sync failed, trying fallback:', err);
+    if (strict) {
+      throw err;
+    }
     // Fallback to regular save endpoint
     try {
       const updated = await apiSaveProfile(p, strict);
