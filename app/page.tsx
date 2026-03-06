@@ -2799,6 +2799,18 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
   const [savingAccount, setSavingAccount] = useState(false);
   const [accountSaveMessage, setAccountSaveMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [saveHover, setSaveHover] = useState(false);
+  
+  // Connected accounts state
+  interface ConnectedAccount {
+    platform: string;
+    platform_username: string;
+    is_active: boolean;
+    connected_at: string;
+    last_synced_at: string;
+  }
+  const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([]);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
 
   useEffect(() => {
     setDisplayName(p?.displayName || user.name);
@@ -2809,6 +2821,109 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
     setLeetcodeUsername(p?.leetcodeUsername || "");
     setCodeforcesHandle(p?.codeforcesHandle || "");
   }, [user.email, p?.displayName, p?.bio, p?.website, p?.location, p?.githubUsername, p?.leetcodeUsername, p?.codeforcesHandle]);
+  
+  // Load connected accounts on mount
+  useEffect(() => {
+    const loadConnectedAccounts = async () => {
+      if (!user.email) return;
+      setLoadingAccounts(true);
+      try {
+        const resp = await fetch(`${BACKEND}/accounts/connected`, {
+          credentials: "include",
+          headers: { "Content-Type": "application/json" }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setConnectedAccounts(data.accounts || []);
+        }
+      } catch (err) {
+        console.error("Failed to load connected accounts:", err);
+      } finally {
+        setLoadingAccounts(false);
+      }
+    };
+    loadConnectedAccounts();
+  }, [user.email]);
+  
+  const handleConnectAccount = async (platform: string, username: string) => {
+    if (!username.trim()) {
+      setAccountSaveMessage({ text: `Please enter your ${platform} username`, type: "error" });
+      setTimeout(() => setAccountSaveMessage(null), 3000);
+      return;
+    }
+    
+    setConnectingPlatform(platform);
+    try {
+      const resp = await fetch(`${BACKEND}/accounts/connect/${platform}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: username.trim() })
+      });
+      
+      if (resp.ok) {
+        const data = await resp.json();
+        setAccountSaveMessage({ text: `✓ ${platform} connected successfully`, type: "success" });
+        
+        // Reload connected accounts
+        const accountsResp = await fetch(`${BACKEND}/accounts/connected`, {
+          credentials: "include",
+          headers: { "Content-Type": "application/json" }
+        });
+        if (accountsResp.ok) {
+          const accountsData = await accountsResp.json();
+          setConnectedAccounts(accountsData.accounts || []);
+        }
+        
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+      } else {
+        setAccountSaveMessage({ text: `Failed to connect ${platform}`, type: "error" });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error(`Failed to connect ${platform}:`, err);
+      setAccountSaveMessage({ text: `Error connecting ${platform}`, type: "error" });
+      setTimeout(() => setAccountSaveMessage(null), 3000);
+    } finally {
+      setConnectingPlatform(null);
+    }
+  };
+  
+  const handleDisconnectAccount = async (platform: string) => {
+    setConnectingPlatform(platform);
+    try {
+      const resp = await fetch(`${BACKEND}/accounts/disconnect/${platform}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" }
+      });
+      
+      if (resp.ok) {
+        setAccountSaveMessage({ text: `${platform} disconnected`, type: "success" });
+        
+        // Reload connected accounts
+        const accountsResp = await fetch(`${BACKEND}/accounts/connected`, {
+          credentials: "include",
+          headers: { "Content-Type": "application/json" }
+        });
+        if (accountsResp.ok) {
+          const accountsData = await accountsResp.json();
+          setConnectedAccounts(accountsData.accounts || []);
+        }
+        
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+      } else {
+        setAccountSaveMessage({ text: `Failed to disconnect ${platform}`, type: "error" });
+        setTimeout(() => setAccountSaveMessage(null), 3000);
+      }
+    } catch (err) {
+      console.error(`Failed to disconnect ${platform}:`, err);
+      setAccountSaveMessage({ text: `Error disconnecting ${platform}`, type: "error" });
+      setTimeout(() => setAccountSaveMessage(null), 3000);
+    } finally {
+      setConnectingPlatform(null);
+    }
+  };
 
   const NOTIF_KEY = `deviq_notif_${user.email}`;
   const PRIVACY_KEY = `deviq_priv_${user.email}`;
@@ -2982,16 +3097,98 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                 Connected Accounts
               </div>
               <div style={{ fontSize: 11, color: tk.text2, marginBottom: 14, lineHeight: 1.5 }}>
-                Link your coding platform accounts to your DevIQ profile. These will be used for personalized analysis and insights.
+                Connect your coding platforms to enable automatic data fetching and personalized insights.
               </div>
             </div>
-            {[{ label: "GitHub Username", value: githubUsername, set: setGithubUsername, placeholder: "your-github-username", desc: "Your GitHub profile username (without @).", icon: "github" }, { label: "LeetCode Username", value: leetcodeUsername, set: setLeetcodeUsername, placeholder: "your-leetcode-username", desc: "Your LeetCode profile username.", icon: "leetcode" }, { label: "Codeforces Handle", value: codeforcesHandle, set: setCodeforcesHandle, placeholder: "your-codeforces-handle", desc: "Your Codeforces username/handle.", icon: "codeforces" }].map(field => (
-              <div key={field.label} style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
-                <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3, display: "block", marginBottom: 6 }}>{field.label}</label>
-                <input value={field.value} onChange={e => { console.log(`📝 ${field.label} changed to:`, e.target.value); field.set(e.target.value); }} placeholder={field.placeholder} type="text" onKeyDown={e => e.key === "Enter" && handleSaveAccount()} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box" as const }} />
-                <div style={{ fontSize: 11, color: tk.text3, marginTop: 5 }}>{field.desc}</div>
-              </div>
-            ))}
+            {[
+              { label: "GitHub", platform: "github", value: githubUsername, set: setGithubUsername, placeholder: "your-github-username", desc: "Connect your GitHub account for repository and contribution analysis." },
+              { label: "LeetCode", platform: "leetcode", value: leetcodeUsername, set: setLeetcodeUsername, placeholder: "your-leetcode-username", desc: "Connect LeetCode to track your problem-solving progress." },
+              { label: "Codeforces", platform: "codeforces", value: codeforcesHandle, set: setCodeforcesHandle, placeholder: "your-codeforces-handle", desc: "Connect Codeforces to analyze your competitive programming stats." }
+            ].map(field => {
+              const connection = connectedAccounts.find(acc => acc.platform === field.platform && acc.is_active);
+              const isConnected = !!connection;
+              const isConnecting = connectingPlatform === field.platform;
+              
+              return (
+                <div key={field.label} style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3 }}>{field.label}</label>
+                    {isConnected && (
+                      <span style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: tk.greenLight, color: tk.green, border: `1px solid ${tk.greenBorder}` }}>
+                        ✓ Connected
+                      </span>
+                    )}
+                  </div>
+                  
+                  {isConnected ? (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <div style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.greenBorder}`, background: tk.greenLight + "20", color: tk.text, fontSize: 13, fontFamily: "monospace" }}>
+                        @{connection.platform_username}
+                      </div>
+                      <button
+                        onClick={() => handleDisconnectAccount(field.platform)}
+                        disabled={isConnecting}
+                        style={{
+                          padding: "9px 16px",
+                          borderRadius: 7,
+                          border: `1px solid ${tk.roseBorder}`,
+                          background: "transparent",
+                          color: tk.rose,
+                          cursor: isConnecting ? "wait" : "pointer",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          fontFamily: "inherit",
+                          opacity: isConnecting ? 0.5 : 1
+                        }}
+                      >
+                        {isConnecting ? "..." : "Disconnect"}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        value={field.value}
+                        onChange={e => field.set(e.target.value)}
+                        placeholder={field.placeholder}
+                        type="text"
+                        style={{
+                          flex: 1,
+                          padding: "9px 12px",
+                          borderRadius: 8,
+                          border: `1px solid ${tk.border}`,
+                          background: tk.bgAlt,
+                          color: tk.text,
+                          fontSize: 13,
+                          outline: "none",
+                          fontFamily: "inherit",
+                          boxSizing: "border-box" as const
+                        }}
+                      />
+                      <button
+                        onClick={() => handleConnectAccount(field.platform, field.value)}
+                        disabled={isConnecting || !field.value.trim()}
+                        style={{
+                          padding: "9px 16px",
+                          borderRadius: 7,
+                          border: `1px solid ${tk.blueBorder}`,
+                          background: (isConnecting || !field.value.trim()) ? tk.track : tk.blue,
+                          color: "#fff",
+                          cursor: (isConnecting || !field.value.trim()) ? "not-allowed" : "pointer",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          fontFamily: "inherit",
+                          opacity: (isConnecting || !field.value.trim()) ? 0.5 : 1
+                        }}
+                      >
+                        {isConnecting ? "Connecting..." : "Connect"}
+                      </button>
+                    </div>
+                  )}
+                  
+                  <div style={{ fontSize: 11, color: tk.text3, marginTop: 5 }}>{field.desc}</div>
+                </div>
+              );
+            })}
             <div style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
               <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3, display: "block", marginBottom: 6 }}>Email Address</label>
               <div style={{ display: "flex", gap: 8 }}>
