@@ -212,8 +212,8 @@ async function apiSignup(name: string, email: string, password: string, avatar?:
     if (!emailExists(email)) {
       const user = { name, email, password, avatar, provider };
       saveUser(user);
-      saveSession({ name, email, avatar, provider });
-      return { name, email, avatar, provider };
+      saveSession({ name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) });
+      return { name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) };
     } else {
       throw new Error('Email already exists (local)');
     }
@@ -231,8 +231,8 @@ async function apiLogin(email: string, password: string): Promise<AuthUser> {
     // fallback to localStorage
     const user = findUser(email, password);
     if (user) {
-      saveSession({ name: user.name, email: user.email, avatar: user.avatar, provider: user.provider });
-      return { name: user.name, email: user.email, avatar: user.avatar, provider: user.provider };
+      saveSession({ name: user.name, email: user.email, avatar: user.avatar, provider: (user.provider as "google" | "github" | "email" | undefined) });
+      return { name: user.name, email: user.email, avatar: user.avatar, provider: (user.provider as "google" | "github" | "email" | undefined) };
     } else {
       throw new Error('Invalid email or password (local)');
     }
@@ -250,8 +250,8 @@ async function apiOAuth(user: { name: string; email: string; avatar?: string; pr
     // fallback to localStorage for OAuth
     const { name, email, avatar, provider } = user;
     saveUser({ name, email, password: "", avatar, provider });
-    saveSession({ name, email, avatar, provider });
-    return { name, email, avatar, provider };
+    saveSession({ name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) });
+    return { name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) };
   }
 }
 
@@ -1307,6 +1307,7 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
    PROFILE PAGE
 ───────────────────────────────────────────────── */
 function ProfilePage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean; onNavigate: (p: Page) => void }) {
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const p = profile;
   const joinDate = p?.joinedAt ? new Date(p.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : "—";
   const providerColors: Record<string, string> = { github: "#24292e", google: "#4285F4", email: tk.blue };
@@ -2499,6 +2500,7 @@ export default function Page() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [hydrated, setHydrated] = useState(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
 
   useEffect(() => {
     const init = async () => {
