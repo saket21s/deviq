@@ -268,6 +268,13 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
     });
     const r = await fetch(`${base}${path}`, opts);
     console.log(`📡 API Response: ${r.status} ${r.statusText}`);
+    
+    // Handle 304 Not Modified - data hasn't changed
+    if (r.status === 304) {
+      console.log('📦 304 Not Modified - using cached data');
+      return null; // Caller should use cached data
+    }
+    
     if (!r.ok) {
       const t = await r.text();
       // Suppress expected 401s during auth/profile fallback flow
@@ -511,6 +518,13 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
 async function apiGetProfile(): Promise<UserProfile> {
   try {
     const remote = await serverRequest('/profile');
+    
+    // Handle 304 Not Modified - return null to indicate no change
+    if (remote === null) {
+      console.log('📦 Profile unchanged on server (304)');
+      throw new Error('NOT_MODIFIED'); // Signal to caller to use current data
+    }
+    
     console.log('📥 Loaded profile from backend:', {
       recentAnalyses: remote.recentAnalyses?.length || 0,
       following: remote.following?.length || 0,
@@ -2756,10 +2770,18 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
       // The useEffect above will automatically update local state when profile changes
       setSyncMessage({ text: '✓ Pulled latest from cloud! Profile updated.', type: 'success' });
       setTimeout(() => setSyncMessage(null), 4000);
-    } catch (err) {
-      console.error('Pull error:', err);
-      setSyncMessage({ text: '✗ Pull failed. Check your connection.', type: 'error' });
-      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err: any) {
+      if (err?.message === 'NOT_MODIFIED') {
+        setSyncMessage({ text: '✓ Already up to date! No changes on server.', type: 'success' });
+        setTimeout(() => setSyncMessage(null), 4000);
+        return;
+      }
+      console.error('Pull error details:', err);
+      console.error('Pull error message:', err?.message);
+      console.error('Pull error stack:', err?.stack);
+      const errorMsg = err?.message || String(err);
+      setSyncMessage({ text: `✗ Pull failed: ${errorMsg}`, type: 'error' });
+      setTimeout(() => setSyncMessage(null), 6000);
     } finally {
       setPulling(false);
     }
@@ -3110,32 +3132,41 @@ export default function Page() {
   const handlePullLatest = async () => {
     if (!user) throw new Error('Not logged in');
     console.log('⬇️ Pulling latest profile from cloud');
-    const latestProfile = await apiGetProfile();
-    console.log('📥 Pulled profile data:', {
-      bio: latestProfile.bio,
-      displayName: latestProfile.displayName,
-      website: latestProfile.website,
-      location: latestProfile.location,
-      recentAnalyses: latestProfile.recentAnalyses?.length || 0
-    });
-    console.log('📥 Current profile state:', {
-      bio: profile?.bio,
-      displayName: profile?.displayName,
-      website: profile?.website,
-      location: profile?.location,
-      recentAnalyses: profile?.recentAnalyses?.length || 0
-    });
-    if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
-    if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
-    if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
-    setProfile(latestProfile);
-    saveProfile(user.email, latestProfile);
-    console.log('✅ Profile state updated to:', {
-      bio: latestProfile.bio,
-      displayName: latestProfile.displayName,
-      website: latestProfile.website,
-      location: latestProfile.location
-    });
+    try {
+      const latestProfile = await apiGetProfile();
+      console.log('📥 Pulled profile data:', {
+        bio: latestProfile.bio,
+        displayName: latestProfile.displayName,
+        website: latestProfile.website,
+        location: latestProfile.location,
+        recentAnalyses: latestProfile.recentAnalyses?.length || 0
+      });
+      console.log('📥 Current profile state:', {
+        bio: profile?.bio,
+        displayName: profile?.displayName,
+        website: profile?.website,
+        location: profile?.location,
+        recentAnalyses: profile?.recentAnalyses?.length || 0
+      });
+      if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
+      if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
+      if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
+      setProfile(latestProfile);
+      saveProfile(user.email, latestProfile);
+      console.log('✅ Profile state updated to:', {
+        bio: latestProfile.bio,
+        displayName: latestProfile.displayName,
+        website: latestProfile.website,
+        location: latestProfile.location
+      });
+    } catch (err: any) {
+      if (err?.message === 'NOT_MODIFIED') {
+        console.log('📦 Profile already up to date (304)');
+        // This is not an error - profile is already current
+        return;
+      }
+      throw err; // Re-throw actual errors
+    }
   };
   const handleDeleteAccount = async () => { if (!user) return; try { await serverRequest('/auth/account', { method: 'DELETE' }); } catch { /* ignore */ } deleteAccount(user.email); setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home"); };
   const toggleDark = () => { setDark(d => { localStorage.setItem("deviq_dark", d ? "0" : "1"); return !d; }); };
