@@ -261,7 +261,13 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
 
   // helper that actually executes a fetch and throws on bad status
   const doFetch = async (base: string) => {
+    console.log(`🌐 API Request: ${base}${path}`, { 
+      method: opts.method || 'GET',
+      credentials: opts.credentials,
+      headers: opts.headers 
+    });
     const r = await fetch(`${base}${path}`, opts);
+    console.log(`📡 API Response: ${r.status} ${r.statusText}`);
     if (!r.ok) {
       const t = await r.text();
       // Suppress expected 401s during auth/profile fallback flow
@@ -273,6 +279,9 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
       const suppressLogout = path.includes('/auth/logout') && (r.status === 400 || r.status === 401);
       if (!suppress401 && !suppressLogout) {
         console.error(`API Error: ${r.status} ${r.statusText} on ${path}`);
+      }
+      if (r.status === 401) {
+        console.warn(`🔒 Not authenticated. Please log in through the UI first!`);
       }
       throw new Error(t || r.statusText);
     }
@@ -2981,6 +2990,17 @@ export default function Page() {
         // ignore errors during init
       }
       setHydrated(true);
+      
+      // Log auth status for debugging
+      setTimeout(() => {
+        const authStatus = loadSession();
+        if (authStatus) {
+          console.log('✅ Logged in as:', authStatus.email);
+        } else {
+          console.log('❌ NOT LOGGED IN - Please click "Sign In" to authenticate');
+        }
+      }, 1000);
+      
       const pathPage = window.location.pathname.replace("/", "") as Page;
       const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following"];
       const initialPage = validPages.includes(pathPage) ? pathPage : "home";
