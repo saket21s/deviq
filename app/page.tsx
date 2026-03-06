@@ -290,7 +290,10 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
       if (r.status === 401) {
         console.warn(`🔒 Not authenticated. Please log in through the UI first!`);
       }
-      throw new Error(t || r.statusText);
+      const error: any = new Error(t || r.statusText);
+      error.status = r.status;
+      error.path = path;
+      throw error;
     }
     return r.json();
   };
@@ -438,8 +441,13 @@ async function apiFetchSession(): Promise<AuthUser | null> {
       saveSession(merged);
     }
     return merged;
-  } catch {
-    // fallback to localStorage
+  } catch (err: any) {
+    // If backend explicitly says unauthenticated, clear stale local session.
+    if (err?.status === 401) {
+      clearSession();
+      return null;
+    }
+    // network / transient issue fallback
     return loadSession();
   }
 }
@@ -3032,11 +3040,18 @@ export default function Page() {
           // fallback to local storage
           const savedUser = loadSession();
           if (savedUser) {
-            setUser(savedUser);
-            const p = loadProfile(savedUser.email);
-            if (!p.displayName) p.displayName = savedUser.name;
-            if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-            saveProfile(savedUser.email, p); setProfile(p);
+            // For OAuth users, require a valid backend session to avoid ghost-login UI.
+            if (savedUser.provider === "google" || savedUser.provider === "github") {
+              clearSession();
+              setUser(null);
+              setProfile(null);
+            } else {
+              setUser(savedUser);
+              const p = loadProfile(savedUser.email);
+              if (!p.displayName) p.displayName = savedUser.name;
+              if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+              saveProfile(savedUser.email, p); setProfile(p);
+            }
           }
         }
       } catch {
