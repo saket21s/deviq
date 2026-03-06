@@ -2822,10 +2822,18 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                 {user.avatar ? <img src={user.avatar} alt={displayName} style={{ width: 52, height: 52, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 52, height: 52, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{initial(displayName || user.name)}</div>}
                 <div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 3 }}>{displayName || user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>Avatar synced from {user.provider || "email"}</div></div>
               </div>
+              {!user.provider && (
+                <div style={{ background: tk.roseLight, border: `1px solid ${tk.roseBorder}`, borderRadius: 9, padding: "12px 14px", marginBottom: 12 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: tk.rose, marginBottom: 6 }}>⚠️ Not Authenticated</div>
+                  <div style={{ fontSize: 11, color: tk.rose, lineHeight: 1.5 }}>
+                    You need to <strong>log in with Google</strong> to sync your profile across devices. Click "Sign Out" and then log in with Gmail.
+                  </div>
+                </div>
+              )}
               <div style={{ background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, borderRadius: 9, padding: "12px 14px" }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: tk.blue, marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
                   <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-                  Cloud Sync
+                  Cloud Sync {!user.provider && "(Login Required)"}
                 </div>
                 <div style={{ fontSize: 11, color: tk.blue, lineHeight: 1.5, marginBottom: 10 }}>
                   Keep your profile synced across all devices. Changes you make here will appear on other devices logged in with <strong>{user.email}</strong>
@@ -2834,10 +2842,10 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
                   💡 Tip: "Save Changes" button automatically syncs. Use manual buttons below for immediate control.
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
-                  <button onClick={handleManualSync} disabled={syncing} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: tk.blue, color: "#fff", cursor: syncing ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: syncing ? 0.6 : 1 }}>
+                  <button onClick={handleManualSync} disabled={syncing || !user.provider} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: user.provider ? tk.blue : tk.border, color: user.provider ? "#fff" : tk.text3, cursor: (syncing || !user.provider) ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: (syncing || !user.provider) ? 0.5 : 1 }} title={!user.provider ? "Please log in with Google first" : ""}>
                     {syncing ? "Syncing..." : "↑ Push to Cloud"}
                   </button>
-                  <button onClick={handlePullLatest} disabled={pulling} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${tk.blueBorder}`, background: "transparent", color: tk.blue, cursor: pulling ? "wait" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: pulling ? 0.6 : 1 }}>
+                  <button onClick={handlePullLatest} disabled={pulling || !user.provider} style={{ padding: "7px 14px", borderRadius: 7, border: `1px solid ${tk.blueBorder}`, background: "transparent", color: user.provider ? tk.blue : tk.text3, cursor: (pulling || !user.provider) ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: (pulling || !user.provider) ? 0.5 : 1 }} title={!user.provider ? "Please log in with Google first" : ""}>
                     {pulling ? "Pulling..." : "↓ Pull Latest"}
                   </button>
                 </div>
