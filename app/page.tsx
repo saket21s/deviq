@@ -2926,6 +2926,49 @@ export default function Page() {
     init();
   }, []);
 
+  // Periodic profile sync - check for updates from other devices every 2 minutes
+  useEffect(() => {
+    if (!user) return;
+
+    const refreshProfile = async () => {
+      try {
+        console.log('🔄 Checking for profile updates from other devices...');
+        const latestProfile = await apiGetProfile();
+        
+        // Compare with current profile to see if there are changes
+        const hasChanges = JSON.stringify(latestProfile) !== JSON.stringify(profile);
+        
+        if (hasChanges) {
+          console.log('✨ Profile updated from another device!');
+          if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
+          if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
+          if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
+          
+          setProfile(latestProfile);
+          saveProfile(user.email, latestProfile);
+        }
+      } catch (err) {
+        console.log('⏭️ Profile sync check skipped (offline or not authenticated)');
+      }
+    };
+
+    // Check for updates every 2 minutes
+    const interval = setInterval(refreshProfile, 120000);
+    
+    // Also check when tab becomes visible (user switches back to the app)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshProfile();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user, profile]);
+
   const handleLogin = async (u: AuthUser) => {
     const mergedUser = enrichAuthUser(u);
     setUser(mergedUser);
