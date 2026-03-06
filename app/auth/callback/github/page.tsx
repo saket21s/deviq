@@ -55,13 +55,13 @@ function GitHubCallbackInner() {
         })
         .then(async (data) => {
           // Connect the GitHub account
-          const BACKEND = typeof window !== 'undefined' && window.location.hostname === 'localhost'
-            ? 'http://localhost:8000'
-            : (process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com');
-          
-          console.log('🔌 Connecting GitHub account to backend:', { BACKEND, username: data.login });
-          
-          const connectResp = await fetch(`${BACKEND}/accounts/connect/github`, {
+          const CONNECT_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+            ? 'http://localhost:8000/accounts/connect/github'
+            : '/api/proxy/accounts/connect/github';
+
+          console.log('🔌 Connecting GitHub account:', { url: CONNECT_URL, username: data.login });
+
+          const connectResp = await fetch(CONNECT_URL, {
             method: "POST",
             credentials: "include",
             headers: { 

@@ -1,17 +1,13 @@
 "use client";
 import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
 
-// base URL for the backend service.  During development we prefer a
-// local copy so that you can iterate without depending on the deployed
-// instance (which may still be on an old version).  If the front-end is
-// served from localhost we automatically default to the local server, but
-// you can override everything with NEXT_PUBLIC_API_BASE_URL.
-//
-// Production builds should set NEXT_PUBLIC_API_BASE_URL to the real host.
-const defaultAPI = (typeof window !== 'undefined' && window.location.hostname === 'localhost')
-  ? 'http://localhost:8000'
-  : 'https://developer-portfolio-backend-bu76.onrender.com';
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || defaultAPI;
+// API base: use same-origin proxy in production to avoid browser CORS issues.
+// In local development we keep direct backend calls for convenience.
+const isLocalFrontend = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+const defaultAPI = isLocalFrontend ? 'http://localhost:8000' : '/api/proxy';
+const API = isLocalFrontend
+  ? (process.env.NEXT_PUBLIC_API_BASE_URL || defaultAPI)
+  : '/api/proxy';
 const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
 const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
