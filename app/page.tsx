@@ -531,8 +531,11 @@ async function apiGetProfile(): Promise<UserProfile> {
       notifications: remote.notifications?.length || 0
     });
     return normalizeUserProfile(remote);
-  } catch (err) {
+  } catch (err: any) {
     console.error('❌ Failed to load profile from backend:', err);
+    if (err?.message?.includes('Invalid token') || err?.message?.includes('Unauthorized')) {
+      console.error('🔑 Token issue detected. You may need to log in again.');
+    }
     // If backend fails, this will throw and caller should use loadProfile
     throw err;
   }
@@ -2780,7 +2783,13 @@ function SettingsPage({ user, profile, tk, isMobile, dark, onDarkToggle, onLogou
       console.error('Pull error message:', err?.message);
       console.error('Pull error stack:', err?.stack);
       const errorMsg = err?.message || String(err);
-      setSyncMessage({ text: `✗ Pull failed: ${errorMsg}`, type: 'error' });
+      
+      // Check for authentication errors
+      if (errorMsg.includes('Invalid token') || errorMsg.includes('Unauthorized')) {
+        setSyncMessage({ text: '✗ Session expired. Please log in again.', type: 'error' });
+      } else {
+        setSyncMessage({ text: `✗ Pull failed: ${errorMsg}`, type: 'error' });
+      }
       setTimeout(() => setSyncMessage(null), 6000);
     } finally {
       setPulling(false);
