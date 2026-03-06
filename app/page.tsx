@@ -271,15 +271,42 @@ async function apiLogout(): Promise<void> {
 }
 
 async function apiGetProfile(): Promise<UserProfile> {
-  return serverRequest('/profile');
+  try {
+    return await serverRequest('/profile');
+  } catch (err) {
+    // If backend fails, this will throw and caller should use loadProfile
+    throw err;
+  }
 }
 
 async function apiSaveProfile(p: UserProfile): Promise<UserProfile> {
-  return serverRequest('/profile', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(p),
-  });
+  try {
+    return await serverRequest('/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(p),
+    });
+  } catch (err) {
+    // If backend fails, return the profile as-is (localStorage will be used by caller)
+    return p;
+  }
+}
+
+// Helper to sync profile to both backend and localStorage
+async function syncProfile(email: string, p: UserProfile): Promise<UserProfile> {
+  // Save to localStorage immediately
+  saveProfile(email, p);
+  
+  // Try to sync to backend
+  try {
+    const updated = await apiSaveProfile(p);
+    // Update localStorage with backend response
+    saveProfile(email, updated);
+    return updated;
+  } catch {
+    // Backend failed, but localStorage is saved
+    return p;
+  }
 }
 
 function initial(str?: string): string {
@@ -2559,11 +2586,11 @@ export default function Page() {
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
       setProfile(p);
     } catch {
-      // fallback to local profile store
+      // fallback to local profile store and sync to backend
       const p = loadProfile(u.email);
       if (!p.displayName) p.displayName = u.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-      saveProfile(u.email, p); setProfile(p);
+      syncProfile(u.email, p).then(saved => setProfile(saved)).catch(() => setProfile(p));
     }
     setAuthModal(null); setMenuOpen(false);
   };
@@ -2575,11 +2602,9 @@ export default function Page() {
   const handleProfileSave = async (updated: UserProfile) => {
     if (!user) return;
     try {
-      const saved = await apiSaveProfile(updated);
+      const saved = await syncProfile(user.email, updated);
       setProfile(saved);
     } catch {
-      // fallback
-      saveProfile(user.email, updated);
       setProfile(updated);
     }
     if (updated.displayName && updated.displayName !== user.name) { const u2 = { ...user, name: updated.displayName }; setUser(u2); saveSession(u2); }
@@ -2766,7 +2791,7 @@ export default function Page() {
       // Keep only recent notifications (last 50)
       p.notifications = notifications.slice(0, 50);
 
-      saveProfile(user.email, p); setProfile({ ...p });
+      syncProfile(user.email, p).then(saved => setProfile({ ...saved })).catch(() => setProfile({ ...p }));
     }
   }, [gh, lc, cf, user]);
 
