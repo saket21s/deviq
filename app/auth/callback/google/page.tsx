@@ -49,8 +49,31 @@ function GoogleCallbackInner() {
       }),
     })
       .then((r) => r.json())
-      .then((data) => {
+      .then(async (data) => {
         if (data.error) throw new Error(data.error);
+        
+        // Also register with backend to get session cookie
+        const API = process.env.NEXT_PUBLIC_API_BASE_URL || 
+          (typeof window !== 'undefined' && window.location.hostname === 'localhost'
+            ? 'http://localhost:8000'
+            : 'https://developer-portfolio-backend-bu76.onrender.com');
+        
+        try {
+          await fetch(`${API}/auth/gmail/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              email: data.email,
+              name: data.name,
+              profile_picture_url: data.avatar || data.picture || data.image,
+            }),
+          });
+          console.log('✅ Backend session created');
+        } catch (err) {
+          console.warn('⚠️ Backend session creation failed:', err);
+        }
+        
         window.opener?.postMessage(
           {
             type: "OAUTH_SUCCESS",
