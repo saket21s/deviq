@@ -318,7 +318,22 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
       error.path = path;
       throw error;
     }
-    return r.json();
+    
+    // Parse JSON with better error handling
+    const text = await r.text();
+    if (!text || text.trim() === '') {
+      console.warn(`⚠️ Empty response from ${path}`);
+      return null;
+    }
+    
+    try {
+      return JSON.parse(text);
+    } catch (jsonErr: any) {
+      console.error(`❌ JSON Parse Error on ${path}:`, jsonErr.message);
+      const preview = text.substring(0, 500);
+      console.error(`📄 Response preview (first 500 chars):`, preview);
+      throw new Error(`Invalid JSON response from server: ${jsonErr.message}`);
+    }
   };
 
   try {
