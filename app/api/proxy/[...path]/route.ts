@@ -56,6 +56,8 @@ async function proxy(req: NextRequest, path: string[]) {
 
   // Read the full response body to avoid truncation issues with streaming
   const responseBody = await resp.text();
+  console.log(`[PROXY] Response body length: ${responseBody.length} chars`);
+  console.log(`[PROXY] Response preview: ${responseBody.substring(0, 200)}...`);
   
   return new Response(responseBody, {
     status: resp.status,
