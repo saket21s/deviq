@@ -54,7 +54,10 @@ async function proxy(req: NextRequest, path: string[]) {
     outHeaders.append(key, value);
   });
 
-  return new Response(resp.body, {
+  // Read the full response body to avoid truncation issues with streaming
+  const responseBody = await resp.text();
+  
+  return new Response(responseBody, {
     status: resp.status,
     statusText: resp.statusText,
     headers: outHeaders,
