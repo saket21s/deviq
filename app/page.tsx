@@ -481,20 +481,15 @@ async function apiFetchSession(): Promise<AuthUser | null> {
     }
     return merged;
   } catch (err: any) {
-    // If backend explicitly says unauthenticated with a token present,
-    // the token is invalid/expired - clear it
-    const hasToken = typeof window !== 'undefined' && localStorage.getItem('auth_token');
-    if (err?.status === 401 && hasToken) {
-      console.warn('🔒 Token is invalid or expired - clearing auth token');
-      localStorage.removeItem('auth_token');
-      // Also clear local session since backend rejected it
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('session');
-      }
-      return null; // Force re-login
-    }
-    // If no token, keep local session (offline mode)
+    // If backend rejects with 401, check if we have a token
     if (err?.status === 401) {
+      const hasToken = typeof window !== 'undefined' && localStorage.getItem('auth_token');
+      if (hasToken) {
+        // Token exists but is invalid - clear it
+        console.warn('🔒 Token is invalid or expired - clearing auth token');
+        localStorage.removeItem('auth_token');
+      }
+      // Return local session as fallback (allows offline mode)
       return loadSession();
     }
     // network / transient issue fallback
