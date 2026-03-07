@@ -1947,7 +1947,7 @@ function ProfilePage({
               
               return (
                 <div key={plt.name} style={{ padding: "13px 18px", borderBottom: i < arr.length - 1 ? `1px solid ${tk.border}` : "none", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: isConnected ? 0 : 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <div style={{ width: 36, height: 36, borderRadius: 8, background: plt.bg, border: `1px solid ${plt.border}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       <PlatformIcon platform={plt.platform as any} size={16} color={plt.color} />
                     </div>
@@ -1961,11 +1961,68 @@ function ProfilePage({
                         </div>
                       )}
                     </div>
+                    
+                    {/* Compact action button/dropdown */}
+                    <div style={{ position: "relative" }}>
+                      {isConnected ? (
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const action = e.target.value;
+                            if (action === "manage") onManageAccount(plt.platform);
+                            else if (action === "disconnect") onDisconnectAccount(plt.platform);
+                            e.target.value = ""; // Reset
+                          }}
+                          disabled={isConnecting}
+                          style={{
+                            padding: "6px 28px 6px 12px",
+                            borderRadius: 6,
+                            border: `1px solid ${tk.border}`,
+                            background: tk.bgAlt,
+                            cursor: isConnecting ? "not-allowed" : "pointer",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            color: tk.text,
+                            fontFamily: "inherit",
+                            opacity: isConnecting ? 0.5 : 1,
+                            appearance: "none",
+                            backgroundImage: `url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23525252' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")`,
+                            backgroundRepeat: "no-repeat",
+                            backgroundPosition: "right 8px center",
+                          }}
+                        >
+                          <option value="">Manage ⋯</option>
+                          <option value="manage">View Details →</option>
+                          <option value="disconnect">Disconnect</option>
+                        </select>
+                      ) : (
+                        <button 
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onConnectAccount(plt.platform); }}
+                          disabled={isConnecting}
+                          style={{ 
+                            padding: "6px 12px", 
+                            borderRadius: 6, 
+                            border: `1px solid ${plt.border}`, 
+                            background: plt.bg, 
+                            cursor: isConnecting ? "not-allowed" : "pointer", 
+                            fontSize: 11, 
+                            fontWeight: 600, 
+                            color: plt.color, 
+                            transition: "all 0.15s", 
+                            fontFamily: "inherit",
+                            opacity: isConnecting ? 0.5 : 1,
+                            whiteSpace: "nowrap"
+                          }}
+                        >
+                          {isConnecting ? "Connecting..." : "Connect"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   
                   {/* Show input field for LeetCode/Codeforces when not connected */}
                   {!isConnected && plt.platform !== "github" && (
-                    <div style={{ marginBottom: 10 }}>
+                    <div style={{ marginTop: 10 }}>
                       <input 
                         type="text"
                         value={plt.platform === "leetcode" ? leetcodeUsername : codeforcesUsername}
@@ -1987,72 +2044,6 @@ function ProfilePage({
                       />
                     </div>
                   )}
-                  
-                  {/* Action buttons */}
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    {isConnected ? (
-                      <>
-                        <button 
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onManageAccount(plt.platform); }}
-                          disabled={isConnecting}
-                          style={{ 
-                            padding: "5px 12px", 
-                            borderRadius: 6, 
-                            border: `1px solid ${tk.border}`, 
-                            background: "transparent", 
-                            cursor: isConnecting ? "not-allowed" : "pointer", 
-                            fontSize: 11, 
-                            fontWeight: 600, 
-                            color: tk.blue, 
-                            transition: "all 0.15s", 
-                            fontFamily: "inherit",
-                            opacity: isConnecting ? 0.5 : 1
-                          }}
-                        >
-                          Manage →
-                        </button>
-                        <button 
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDisconnectAccount(plt.platform); }}
-                          disabled={isConnecting}
-                          style={{ 
-                            padding: "5px 12px", 
-                            borderRadius: 6, 
-                            border: `1px solid ${tk.roseBorder}`, 
-                            background: "transparent", 
-                            cursor: isConnecting ? "not-allowed" : "pointer", 
-                            fontSize: 11, 
-                            fontWeight: 600, 
-                            color: tk.rose, 
-                            transition: "all 0.15s", 
-                            fontFamily: "inherit",
-                            opacity: isConnecting ? 0.5 : 1
-                          }}
-                        >
-                          {isConnecting ? "Disconnecting..." : "Disconnect"}
-                        </button>
-                      </>
-                    ) : (
-                      <button 
-                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onConnectAccount(plt.platform); }}
-                        disabled={isConnecting}
-                        style={{ 
-                          padding: "5px 12px", 
-                          borderRadius: 6, 
-                          border: `1px solid ${plt.border}`, 
-                          background: plt.bg, 
-                          cursor: isConnecting ? "not-allowed" : "pointer", 
-                          fontSize: 11, 
-                          fontWeight: 600, 
-                          color: plt.color, 
-                          transition: "all 0.15s", 
-                          fontFamily: "inherit",
-                          opacity: isConnecting ? 0.5 : 1
-                        }}
-                      >
-                        {isConnecting ? "Connecting..." : `Connect ${plt.name}`}
-                      </button>
-                    )}
-                  </div>
                 </div>
               );
             })}
