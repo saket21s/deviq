@@ -48,16 +48,24 @@ async function proxy(req: NextRequest, path: string[]) {
 
   console.log(`[PROXY] Response: ${resp.status} ${resp.statusText}`);
 
-  const outHeaders = new Headers();
-  resp.headers.forEach((value, key) => {
-    if (key.toLowerCase() === "content-encoding") return;
-    outHeaders.append(key, value);
-  });
-
-  // Read the full response body to avoid truncation issues with streaming
+  // Read the full response body first to avoid streaming issues
   const responseBody = await resp.text();
   console.log(`[PROXY] Response body length: ${responseBody.length} chars`);
-  console.log(`[PROXY] Response preview: ${responseBody.substring(0, 200)}...`);
+  console.log(`[PROXY] Response body: ${responseBody}`);
+  
+  // Build response headers (skip content-encoding since we've already decoded)
+  const outHeaders = new Headers();
+  resp.headers.forEach((value, key) => {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === "content-encoding") return; // Already decoded
+    if (lowerKey === "content-length") return; // Will be recalculated
+    outHeaders.append(key, value);
+  });
+  
+  // Ensure content-type is set
+  if (!outHeaders.has("content-type")) {
+    outHeaders.set("content-type", "application/json");
+  }
   
   return new Response(responseBody, {
     status: resp.status,
