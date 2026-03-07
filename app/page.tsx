@@ -3336,8 +3336,11 @@ export default function Page() {
         if (storedDark !== null) setDark(storedDark === "1");
         else setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
 
-        // try server session first
-        const serverUser = await apiFetchSession();
+        // Try server session only when we have local auth context.
+        // This avoids expected 401 noise for first-time unauthenticated visitors.
+        const savedUser = loadSession();
+        const hasLocalToken = !!localStorage.getItem("auth_token");
+        const serverUser = (hasLocalToken || !!savedUser) ? await apiFetchSession() : null;
         if (serverUser) {
           const mergedUser = enrichAuthUser(serverUser);
           setUser(mergedUser);
@@ -3379,7 +3382,6 @@ export default function Page() {
           }
         } else {
           // fallback to local storage
-          const savedUser = loadSession();
           if (savedUser) {
             setUser(savedUser);
             const p = loadProfile(savedUser.email);
