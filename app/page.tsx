@@ -3340,7 +3340,7 @@ export default function Page() {
         // This avoids expected 401 noise for first-time unauthenticated visitors.
         const savedUser = loadSession();
         const hasLocalToken = !!localStorage.getItem("auth_token");
-        const serverUser = (hasLocalToken || !!savedUser) ? await apiFetchSession() : null;
+        const serverUser = hasLocalToken ? await apiFetchSession() : null;
         if (serverUser) {
           const mergedUser = enrichAuthUser(serverUser);
           setUser(mergedUser);
