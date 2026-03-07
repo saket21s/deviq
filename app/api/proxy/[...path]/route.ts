@@ -29,13 +29,18 @@ async function proxy(req: NextRequest, path: string[]) {
   const method = req.method.toUpperCase();
   const body = method === "GET" || method === "HEAD" ? undefined : await req.text();
 
+  console.log(`[PROXY] ${method} ${target} | Auth: ${authorization ? "yes" : "no"} | Cookie: ${cookie ? "yes" : "no"}`);
+
   const resp = await fetch(target, {
     method,
     headers,
     body,
     redirect: "manual",
     cache: "no-store",
+    credentials: "include",
   });
+
+  console.log(`[PROXY] Response: ${resp.status} ${resp.statusText}`);
 
   const outHeaders = new Headers();
   resp.headers.forEach((value, key) => {

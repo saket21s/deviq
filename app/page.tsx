@@ -269,12 +269,22 @@ function cacheAuthUser(user: AuthUser) {
 async function serverRequest(path: string, opts: RequestInit = {}) {
   opts.credentials = "include";
 
+  // Add Authorization header from localStorage if available
+  const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+  if (authToken) {
+    opts.headers = {
+      ...opts.headers,
+      'Authorization': `Bearer ${authToken}`,
+    };
+  }
+
   // helper that actually executes a fetch and throws on bad status
   const doFetch = async (base: string) => {
     console.log(`🌐 API Request: ${base}${path}`, { 
       method: opts.method || 'GET',
       credentials: opts.credentials,
-      headers: opts.headers 
+      headers: opts.headers,
+      hasAuthToken: !!authToken
     });
     const r = await fetch(`${base}${path}`, opts);
     console.log(`📡 API Response: ${r.status} ${r.statusText}`);
