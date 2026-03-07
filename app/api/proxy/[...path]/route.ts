@@ -22,7 +22,12 @@ async function proxy(req: NextRequest, path: string[]) {
   const userAgent = req.headers.get("user-agent");
 
   if (contentType) headers.set("content-type", contentType);
-  if (authorization) headers.set("authorization", authorization);
+  if (authorization) {
+    headers.set("authorization", authorization);
+    console.log(`[PROXY] Authorization header: ${authorization.substring(0, 30)}...`);
+  } else {
+    console.log(`[PROXY] ⚠️ No authorization header in request`);
+  }
   if (cookie) headers.set("cookie", cookie);
   if (userAgent) headers.set("user-agent", userAgent);
 
@@ -30,6 +35,7 @@ async function proxy(req: NextRequest, path: string[]) {
   const body = method === "GET" || method === "HEAD" ? undefined : await req.text();
 
   console.log(`[PROXY] ${method} ${target} | Auth: ${authorization ? "yes" : "no"} | Cookie: ${cookie ? "yes" : "no"}`);
+  console.log(`[PROXY] All request headers:`, Array.from(req.headers.keys()));
 
   const resp = await fetch(target, {
     method,
