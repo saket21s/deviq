@@ -272,10 +272,13 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
   // Add Authorization header from localStorage if available
   const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
   if (authToken) {
+    console.log(`🔑 Using auth token: ${authToken.substring(0, 20)}...${authToken.substring(authToken.length - 10)}`);
     opts.headers = {
       ...opts.headers,
       'Authorization': `Bearer ${authToken}`,
     };
+  } else {
+    console.warn('⚠️ No auth token found in localStorage - request will be unauthenticated');
   }
 
   // helper that actually executes a fetch and throws on bad status
