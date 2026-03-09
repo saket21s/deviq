@@ -55,9 +55,8 @@ function GitHubCallbackInner() {
         })
         .then(async (data) => {
           // Connect the GitHub account
-          const CONNECT_URL = typeof window !== 'undefined' && window.location.hostname === 'localhost'
-            ? 'http://localhost:8000/accounts/connect/github'
-            : '/api/proxy/accounts/connect/github';
+          const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+          const CONNECT_URL = `${API_BASE}/accounts/connect/github`;
 
           console.log('🔌 Connecting GitHub account:', { url: CONNECT_URL, username: data.login });
 

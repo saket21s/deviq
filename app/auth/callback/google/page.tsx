@@ -52,11 +52,8 @@ function GoogleCallbackInner() {
       .then(async (data) => {
         if (data.error) throw new Error(data.error);
         
-        // Also register with backend to get session cookie
-        const API = process.env.NEXT_PUBLIC_API_BASE_URL || 
-          (typeof window !== 'undefined' && window.location.hostname === 'localhost'
-            ? 'http://localhost:8000'
-            : 'https://developer-portfolio-backend-bu76.onrender.com');
+        // Register with backend to get session cookie
+        const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
         
         try {
           console.log('🔑 Creating backend session for:', data.email);

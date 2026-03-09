@@ -1,18 +1,20 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Disable ESLint during Vercel builds (prevents build failures)
+  // Enable static export for GitHub Pages
+  output: 'export',
+  
+  // Disable image optimization for static export
+  images: {
+    unoptimized: true,
+  },
+  
+  // Base path for GitHub Pages (update if using repo name as path)
+  // basePath: '',
+  
+  // Disable ESLint during builds
   eslint: {
     ignoreDuringBuilds: true,
-  },
-
-  async rewrites() {
-    return [
-      { source: "/analyze", destination: "/" },
-      { source: "/compare", destination: "/" },
-      { source: "/profile", destination: "/" },
-      { source: "/settings", destination: "/" },
-    ];
   },
 };
 

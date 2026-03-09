@@ -1,15 +1,11 @@
 "use client";
 import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
 
-// API base: use same-origin proxy in production to avoid browser CORS issues.
-// In local development we keep direct backend calls for convenience.
-const isLocalFrontend = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-const defaultAPI = isLocalFrontend ? 'http://localhost:8000' : '/api/proxy';
-const API = isLocalFrontend
-  ? (process.env.NEXT_PUBLIC_API_BASE_URL || defaultAPI)
-  : '/api/proxy';
-const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
-const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
+// API base: Direct backend URL for static deployment
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+// Secrets removed - these operations should be done via backend API
+// const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
+// const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 const GITHUB_CLIENT_ID = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID ?? "";
 const LINKEDIN_CLIENT_ID = process.env.NEXT_PUBLIC_LINKEDIN_CLIENT_ID ?? "";
@@ -1029,9 +1025,11 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
   const heatColors = dark ? ["#1a1a1a", "#0d3320", "#155230", "#1e7a47", "#26a35e"] : ["#EBEBEB", "#BBF7D0", "#6EE7A0", "#22C55E", "#15803D"];
   useEffect(() => {
     if (!username) return;
-    if (!GITHUB_TOKEN) { setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: "GitHub token missing" }); return; }
-    setLoading(true); setHdata(null);
-    fetchHeatmap(username, GITHUB_TOKEN).then(d => { setHdata(d); setLoading(false); }).catch(e => { setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: String(e) }); setLoading(false); });
+    // TODO: Call backend /contributions/{username} endpoint instead
+    setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: "Heatmap temporarily disabled - backend integration needed" });
+    // if (!GITHUB_TOKEN) { setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: "GitHub token missing" }); return; }
+    // setLoading(true); setHdata(null);
+    // fetchHeatmap(username, GITHUB_TOKEN).then(d => { setHdata(d); setLoading(false); }).catch(e => { setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: String(e) }); setLoading(false); });
   }, [username]);
   const CELL = 11, GAP = 2, TOTAL = CELL + GAP;
   const { weeks, monthLabels } = hdata?.contributions?.length ? buildGrid(hdata.contributions) : { weeks: [], monthLabels: [] };
@@ -1290,34 +1288,8 @@ Combined DevIQ Score: ${data.combined_score}/100`;
   };
 
   const call = async (m: AIMode) => {
-    if (!GROQ_KEY) {
-      setResults(r => ({ ...r, [m]: "No API key found. Add NEXT_PUBLIC_GROQ_API_KEY to your .env.local file." }));
-      return;
-    }
-    setLoading(m);
-    setResults(r => ({ ...r, [m]: "" }));
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${GROQ_KEY}`,
-        },
-        body: JSON.stringify({
-          model: "llama-3.1-8b-instant",
-          messages: [{ role: "user", content: PROMPTS[m] }],
-          max_tokens: 600,
-        }),
-      });
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(`Groq ${res.status}: ${JSON.stringify(e)}`); }
-      const data2 = await res.json();
-      const text = data2.choices?.[0]?.message?.content ?? "No response received.";
-      setResults(r => ({ ...r, [m]: text }));
-      setLoading(null);
-    } catch (e) {
-      setResults(r => ({ ...r, [m]: `Error: ${e instanceof Error ? e.message : String(e)}` }));
-      setLoading(null);
-    }
+    // TODO: Call backend AI endpoint instead of exposing API key
+    setResults(r => ({ ...r, [m]: "AI features temporarily disabled - backend integration needed for security" }));
   };
 
   const current = results[mode];
@@ -1330,26 +1302,7 @@ Combined DevIQ Score: ${data.combined_score}/100`;
 
   const translateToHindi = async () => {
     if (translated[mode]) { setShowHindi(s => ({ ...s, [mode]: !s[mode] })); return; }
-    if (!GROQ_KEY) return;
-    setTranslating(true);
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${GROQ_KEY}` },
-        body: JSON.stringify({
-          model: "llama-3.1-8b-instant", messages: [{
-            role: "user", content: `Translate the following text to Hindi. Only output the translated text, nothing else:
-
-${current}`
-          }], max_tokens: 800
-        }),
-      });
-      const data2 = await res.json();
-      const text = data2.choices?.[0]?.message?.content ?? "";
-      setTranslated(t => ({ ...t, [mode]: text }));
-      setShowHindi(s => ({ ...s, [mode]: true }));
-    } catch { }
-    setTranslating(false);
+    return; // Disabled - needs backend integration
   };
 
   const renderText = (text: string) => {
@@ -2270,9 +2223,11 @@ The user can ask about:
 
 Be helpful, concise, and encouraging. Use the profile data to provide personalized insights. If they ask about something not in their profile, suggest they analyze more profiles or follow more developers.`;
 
-      if (!GROQ_KEY) {
-        throw new Error("Groq API key not configured");
-      }
+      // Disabled - needs backend integration
+      throw new Error("Chat temporarily disabled - backend integration needed for security");
+      // if (!GROQ_KEY) {
+      //   throw new Error("Groq API key not configured");
+      // }
 
       const payload = {
         model: "llama-3.1-8b-instant",
@@ -2285,32 +2240,33 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
         temperature: 0.7
       };
 
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${GROQ_KEY}`
-        },
-        body: JSON.stringify(payload)
-      });
+      // Disabled - needs backend integration
+      // const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      //   method: "POST",
+      //   headers: {
+      //     "Content-Type": "application/json",
+      //     "Authorization": `Bearer ${GROQ_KEY}`
+      //   },
+      //   body: JSON.stringify(payload)
+      // });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Groq API error response:", errorText);
-        throw new Error(`API request failed: ${response.status} - ${errorText}`);
-      }
+      // if (!response.ok) {
+      //   const errorText = await response.text();
+      //   console.error("Groq API error response:", errorText);
+      //   throw new Error(`API request failed: ${response.status} - ${errorText}`);
+      // }
 
-      const data = await response.json();
-      const aiResponse = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
+      // const data = await response.json();
+      // const aiResponse = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
 
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: aiResponse,
-        timestamp: new Date()
-      };
+      // const assistantMessage: ChatMessage = {
+      //   id: (Date.now() + 1).toString(),
+      //   role: "assistant",
+      //   content: aiResponse,
+      //   timestamp: new Date()
+      // };
 
-      setMessages(prev => [...prev, assistantMessage]);
+      // setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
       console.error("Chat error:", error);
       const errorMessage: ChatMessage = {
@@ -2760,10 +2716,8 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
     }
     setIsSearching(true);
     try {
-      // Search GitHub users
-      const githubRes = await fetch(`https://api.github.com/search/users?q=${encodeURIComponent(query)}&per_page=5`, {
-        headers: GITHUB_TOKEN ? { Authorization: `token ${GITHUB_TOKEN}` } : {}
-      });
+      // Search GitHub users (unauthenticated - rate limited)
+      const githubRes = await fetch(`https://api.github.com/search/users?q=${encodeURIComponent(query)}&per_page=5`);
       const githubData = await githubRes.json();
 
       const results: FollowedUser[] = [];
