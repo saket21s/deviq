@@ -2661,21 +2661,22 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
     setCompanyLoading(true);
     setCompanyData(null);
     try {
+      console.log("Fetching:", slug);
       const res = await fetch(`${API}/leetcode/company-problems/${slug}`);
-      if (res.ok) {
-        const data: CompanyData = await res.json();
+      const data: CompanyData = await res.json();
+      if (data && Array.isArray(data.problems)) {
         setCompanyData(data);
+        // Auto-scroll to problems panel
+        setTimeout(() => {
+          document.getElementById("company-problems-panel")?.scrollIntoView({ 
+            behavior: "smooth", block: "start" 
+          });
+        }, 100);
       } else {
-        // Try fallback: show a friendly message and empty data
-        setCompanyData({
-          company: slug,
-          slug,
-          total_problems: 0,
-          problems: [],
-          last_updated: new Date().toISOString(),
-        });
+        throw new Error("Invalid response shape");
       }
-    } catch {
+    } catch (e) {
+      console.error("Company fetch error:", e);
       setCompanyData({
         company: slug,
         slug,
@@ -2920,7 +2921,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
         )}
 
         {companyData && !companyLoading && (
-            <div style={{ border: `1px solid ${tk.border}`, borderRadius: 12, overflow: "hidden" }}>
+          <div id="company-problems-panel" style={{ border: `1px solid ${tk.border}`, borderRadius: 12, overflow: "hidden" }}>
             {/* Company header */}
             <div style={{ padding: "16px 20px", background: tk.bgAlt, borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
