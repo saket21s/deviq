@@ -10,11 +10,11 @@
     "electron": "electron .",
     "export": "next build && cp public/404.html out/404.html",
     "deploy": "gh-pages -d out -t -f",
-    "predeploy": "npm run export"
+    "predeploy": "next build"
   },
   "dependencies": {
     "@capacitor/android": "^8.1.0",
-    "@capacitor/cli": "^8.1.0",
+    "@capacitor/cli": "^2.5.0",
     "@capacitor/core": "^8.1.0",
     "axios": "^1.6.0",
     "chart.js": "^4.4.0",
@@ -28,7 +28,7 @@
     "@tailwindcss/postcss": "^4.2.0",
     "@types/react": "19.2.14",
     "autoprefixer": "^10.4.24",
-    "electron": "^30.0.0",
+    "electron": "^41.0.2",
     "eslint": "^8.0.0",
     "gh-pages": "^6.3.0",
     "postcss": "^8.5.6",
