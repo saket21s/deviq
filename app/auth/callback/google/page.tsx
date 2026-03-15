@@ -40,11 +40,14 @@ function GoogleCallbackInner() {
 
     sessionStorage.removeItem("oauth_state");
 
-    fetch("/api/auth/google", {
+    const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+    fetch(`${API_BASE}/auth/oauth`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         code,
+        provider: "google",
         redirect_uri: `${window.location.origin}/auth/callback/google`,
       }),
     })
@@ -52,35 +55,8 @@ function GoogleCallbackInner() {
       .then(async (data) => {
         if (data.error) throw new Error(data.error);
         
-        // Register with backend to get session cookie
-        const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
-        
-        try {
-          console.log('🔑 Creating backend session for:', data.email);
-          const backendRes = await fetch(`${API}/auth/gmail/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              email: data.email,
-              name: data.name,
-              profile_picture_url: data.avatar || data.picture || data.image,
-            }),
-          });
-          
-          const backendData = await backendRes.json();
-          console.log('📦 Backend response:', backendRes.status, backendData);
-          
-          if (!backendRes.ok) {
-            console.error('❌ Backend session failed:', backendData);
-            throw new Error(`Backend session failed: ${backendData.error || backendRes.statusText}`);
-          }
-          
-          console.log('✅ Backend session created successfully');
-        } catch (err) {
-          console.error('⚠️ Backend session creation failed:', err);
-          // Don't fail the whole login, but user will need to re-auth
-        }
+        // Backend /auth/oauth already handles session creation
+        console.log('✅ Google OAuth successful:', data);
         
         window.opener?.postMessage(
           {

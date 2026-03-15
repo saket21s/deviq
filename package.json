@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "electron": "electron .",
-    "export": "next build",
+    "export": "next build && cp public/404.html out/404.html",
     "deploy": "gh-pages -d out -t -f",
     "predeploy": "npm run export"
   },

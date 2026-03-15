@@ -40,25 +40,31 @@ function GitHubCallbackInner() {
       // Optional token from localStorage; cookie auth is primary
       const authToken = localStorage.getItem("auth_token");
 
-      // Step 2: Exchange code for user data
-      fetch("/api/auth/github", {
+      // Step 2: Exchange code for user data via backend
+      const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+      const redirectUri = `${window.location.origin}/auth/callback/github`;
+      fetch(`${API_BASE}/auth/oauth`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, provider: "github", redirect_uri: redirectUri }),
       })
         .then(async (r) => {
           const data = await r.json();
           if (!r.ok || data?.error) {
-            throw new Error(data?.error || "GitHub OAuth failed");
+            throw new Error(data?.detail || data?.error || "GitHub OAuth failed");
           }
           return data;
         })
         .then(async (data) => {
           // Connect the GitHub account
-          const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
-          const CONNECT_URL = `${API_BASE}/accounts/connect/github`;
+          // The /auth/oauth response nests user info under data.user
+          const ghUser = data.user || data;
+          const ghUsername = ghUser.login || ghUser.username || ghUser.name;
+          const API_BASE2 = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+          const CONNECT_URL = `${API_BASE2}/accounts/connect/github`;
 
-          console.log('🔌 Connecting GitHub account:', { url: CONNECT_URL, username: data.login });
+          console.log('🔌 Connecting GitHub account:', { url: CONNECT_URL, username: ghUsername });
 
           const connectResp = await fetch(CONNECT_URL, {
             method: "POST",
@@ -68,11 +74,11 @@ function GitHubCallbackInner() {
               ...(authToken ? { "Authorization": `Bearer ${authToken}` } : {})
             },
             body: JSON.stringify({ 
-              username: data.login || data.name,
+              username: ghUsername,
               metadata: { 
-                name: data.name,
-                email: data.email,
-                avatar_url: data.avatar || data.avatar_url
+                name: ghUser.name || ghUser.username,
+                email: ghUser.email,
+                avatar_url: ghUser.avatar || ghUser.avatar_url || ghUser.profile_picture_url
               }
             })
           });
@@ -82,7 +88,7 @@ function GitHubCallbackInner() {
           if (connectResp.ok) {
             console.log('✅ GitHub account connected successfully');
             window.opener?.postMessage(
-              { type: "GITHUB_CONNECTED", username: data.login || data.name },
+              { type: "GITHUB_CONNECTED", username: ghUsername },
               window.location.origin
             );
           } else {
@@ -112,25 +118,29 @@ function GitHubCallbackInner() {
 
     sessionStorage.removeItem("oauth_state");
 
-    fetch("/api/auth/github", {
+    const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+    const redirectUri = `${window.location.origin}/auth/callback/github`;
+    fetch(`${API_BASE}/auth/oauth`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({ code, provider: "github", redirect_uri: redirectUri }),
     })
       .then(async (r) => {
         const data = await r.json();
         if (!r.ok || data?.error) {
-          throw new Error(data?.error || "GitHub OAuth failed");
+          throw new Error(data?.detail || data?.error || "GitHub OAuth failed");
         }
         return data;
       })
       .then((data) => {
+        const u = data.user || data;
         window.opener?.postMessage(
           {
             type: "OAUTH_SUCCESS",
-            name: data.name,
-            email: data.email,
-            avatar: data.avatar || data.avatar_url || data.picture,
+            name: u.name || u.username,
+            email: u.email || "",
+            avatar: u.avatar || u.avatar_url || u.profile_picture_url || u.picture,
             provider: "github",
           },
           window.location.origin

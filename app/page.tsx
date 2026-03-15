@@ -2,7 +2,8 @@
 import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
 
 // API base: Direct backend URL for static deployment
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com'
+
 // Secrets removed - these operations should be done via backend API
 // const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
 // const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
@@ -149,14 +150,26 @@ interface WeakCategory {
   tag: string; totalProblems: number; solvedProblems: number; accuracy: number;
   difficulties: { Easy: number; Medium: number; Hard: number };
 }
+interface CompanyProblem {
+  id: string; title: string; slug: string; difficulty: "Easy" | "Medium" | "Hard";
+  topicTags: string[]; paidOnly: boolean; frequency: number; url: string;
+}
+interface CompanyData {
+  company: string; slug: string; total_problems: number;
+  problems: CompanyProblem[]; last_updated: string;
+}
+interface CompanyInfo {
+  name: string; slug: string; icon: string; tier: string; logo?: string;
+}
 interface UserProfile {
   displayName: string; bio: string; website: string; location: string; joinedAt: string;
   avatar?: string;
   githubUsername?: string; leetcodeUsername?: string; codeforcesHandle?: string;
   analysesRun: number; comparisonsRun: number; aiInsightsRun: number;
   recentAnalyses?: AnalysisRecord[];
-  following?: FollowedUser[]; followers?: string[]; notifications?: Notification[];
+  following?: FollowedUser[]; followers?: FollowedUser[]; notifications?: Notification[];
   solvedProblems?: SolvedProblem[]; weakCategories?: WeakCategory[]; lastPracticeProblem?: LeetCodeProblem;
+  companyTracking?: { [companySlug: string]: string[] }; // slug -> array of solved problem slugs
 }
 function getUsers(): StoredUser[] { try { return JSON.parse(localStorage.getItem(USERS_KEY) || "[]"); } catch { return []; } }
 function saveUser(u: StoredUser) { const users = getUsers().filter(x => x.email.toLowerCase() !== u.email.toLowerCase()); users.push(u); localStorage.setItem(USERS_KEY, JSON.stringify(users)); }
@@ -217,7 +230,7 @@ function normalizeAvatarUrl(url?: string): string | undefined {
 function coerceAuthUser(payload: any, fallback?: Partial<AuthUser>): AuthUser {
   const nestedUser = (payload?.user && typeof payload.user === "object") ? payload.user : undefined;
   const source = nestedUser || payload;
-  const name = source?.name || source?.full_name || source?.username || source?.login || payload?.name || fallback?.name || "User";
+  const name = source?.displayName || source?.name || source?.full_name || payload?.name || payload?.displayName || fallback?.name || source?.username || "User";
   const email = source?.email || payload?.email || fallback?.email || "";
   const avatar = normalizeAvatarUrl(
     source?.avatar ||
@@ -236,9 +249,10 @@ function coerceAuthUser(payload: any, fallback?: Partial<AuthUser>): AuthUser {
 }
 
 function enrichAuthUser(base: AuthUser): AuthUser {
-  const local = getUsers().find(u => u.email.toLowerCase() === base.email.toLowerCase());
+  const baseEmail = (base.email || "").toLowerCase();
+  const local = baseEmail ? getUsers().find(u => (u.email || "").toLowerCase() === baseEmail) : undefined;
   const session = loadSession();
-  const sessionMatch = session?.email?.toLowerCase() === base.email.toLowerCase() ? session : null;
+  const sessionMatch = baseEmail && session?.email?.toLowerCase() === baseEmail ? session : null;
   return {
     ...base,
     avatar: normalizeAvatarUrl(base.avatar || local?.avatar || sessionMatch?.avatar),
@@ -248,7 +262,8 @@ function enrichAuthUser(base: AuthUser): AuthUser {
 
 function cacheAuthUser(user: AuthUser) {
   const normalized = enrichAuthUser(user);
-  const existing = getUsers().find(u => u.email.toLowerCase() === normalized.email.toLowerCase());
+  if (!normalized.email) return;
+  const existing = getUsers().find(u => (u.email || "").toLowerCase() === normalized.email.toLowerCase());
   saveUser({
     name: normalized.name,
     email: normalized.email,
@@ -546,7 +561,7 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
 
   return {
     ...base,
-    displayName: source.displayName || source.name || source.username || base.displayName || "",
+    displayName: source.displayName || source.name || base.displayName || "",
     bio: typeof source.bio === "string" ? source.bio : (base.bio || ""),
     website: typeof source.website === "string" ? source.website : (base.website || ""),
     location: typeof source.location === "string" ? source.location : (base.location || ""),
@@ -568,6 +583,7 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
     solvedProblems: Array.isArray(source.solvedProblems) ? source.solvedProblems : base.solvedProblems,
     weakCategories: Array.isArray(source.weakCategories) ? source.weakCategories : base.weakCategories,
     lastPracticeProblem: source.lastPracticeProblem || base.lastPracticeProblem,
+    companyTracking: (source.companyTracking && Object.keys(source.companyTracking).length > 0) ? source.companyTracking : base.companyTracking,
   };
 }
 
@@ -594,6 +610,7 @@ function mergeProfilePreferNonEmpty(remote: UserProfile, local?: UserProfile | n
     solvedProblems: (remote.solvedProblems && remote.solvedProblems.length > 0) ? remote.solvedProblems : (local.solvedProblems || []),
     weakCategories: (remote.weakCategories && remote.weakCategories.length > 0) ? remote.weakCategories : (local.weakCategories || []),
     lastPracticeProblem: remote.lastPracticeProblem || local.lastPracticeProblem,
+    companyTracking: (remote.companyTracking && Object.keys(remote.companyTracking).length > 0) ? remote.companyTracking : (local.companyTracking || {}),
   };
 }
 
@@ -610,14 +627,17 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
     following: p.following || [],
     notifications: p.notifications || [],
     analysesRun: p.analysesRun || 0,
+    comparisonsRun: p.comparisonsRun || 0,
+    aiInsightsRun: p.aiInsightsRun || 0,
     displayName: p.displayName || "",
     joinedAt: p.joinedAt || "",
     avatar: p.avatar || "",
     solvedProblems: p.solvedProblems || [],
     weakCategories: p.weakCategories || [],
     lastPracticeProblem: p.lastPracticeProblem,
+    companyTracking: p.companyTracking || {},
   };
-  console.log('🔧 Payload prepared:', { bio: payload.bio, website: payload.website, location: payload.location });
+  console.log('🔧 Payload prepared:', { displayName: payload.displayName, bio: payload.bio, website: payload.website, location: payload.location });
   return payload;
 }
 
@@ -1025,11 +1045,21 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
   const heatColors = dark ? ["#1a1a1a", "#0d3320", "#155230", "#1e7a47", "#26a35e"] : ["#EBEBEB", "#BBF7D0", "#6EE7A0", "#22C55E", "#15803D"];
   useEffect(() => {
     if (!username) return;
-    // TODO: Call backend /contributions/{username} endpoint instead
-    setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: "Heatmap temporarily disabled - backend integration needed" });
-    // if (!GITHUB_TOKEN) { setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: "GitHub token missing" }); return; }
-    // setLoading(true); setHdata(null);
-    // fetchHeatmap(username, GITHUB_TOKEN).then(d => { setHdata(d); setLoading(false); }).catch(e => { setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: String(e) }); setLoading(false); });
+    setLoading(true);
+    setHdata(null);
+    
+    const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+    fetch(`${API}/contributions/${username}`, { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error);
+        setHdata(data);
+        setLoading(false);
+      })
+      .catch(e => {
+        setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: String(e) });
+        setLoading(false);
+      });
   }, [username]);
   const CELL = 11, GAP = 2, TOTAL = CELL + GAP;
   const { weeks, monthLabels } = hdata?.contributions?.length ? buildGrid(hdata.contributions) : { weeks: [], monthLabels: [] };
@@ -1267,7 +1297,7 @@ const AI_MODES: { id: AIMode; label: string; emoji: string; desc: string; color:
   { id: "interview", label: "Interview", emoji: "", desc: "Are you interview-ready? Honest verdict", color: "#A78BFA" },
 ];
 
-function AIPanel({ data, gh, lc, cf, tk, dark }: { data: ResultData; gh: string; lc: string; cf: string; tk: Theme; dark: boolean }) {
+function AIPanel({ data, gh, lc, cf, tk, dark, onAiInsight }: { data: ResultData; gh: string; lc: string; cf: string; tk: Theme; dark: boolean; onAiInsight?: () => void }) {
   const [mode, setMode] = useState<AIMode>("overview");
   const [results, setResults] = useState<Record<AIMode, string>>({ overview: "", roast: "", plan: "", skills: "", interview: "" });
   const [loading, setLoading] = useState<AIMode | null>(null);
@@ -1288,8 +1318,26 @@ Combined DevIQ Score: ${data.combined_score}/100`;
   };
 
   const call = async (m: AIMode) => {
-    // TODO: Call backend AI endpoint instead of exposing API key
-    setResults(r => ({ ...r, [m]: "AI features temporarily disabled - backend integration needed for security" }));
+    setLoading(m);
+    try {
+      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+      const response = await fetch(`${API}/ai/insights`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: PROMPTS[m] })
+      });
+      
+      if (!response.ok) throw new Error('AI request failed');
+      
+      const data = await response.json();
+      setResults(r => ({ ...r, [m]: data.result }));
+      onAiInsight?.();
+    } catch (error) {
+      setResults(r => ({ ...r, [m]: `Error: ${error instanceof Error ? error.message : 'AI service unavailable'}` }));
+    } finally {
+      setLoading(null);
+    }
   };
 
   const current = results[mode];
@@ -1302,7 +1350,24 @@ Combined DevIQ Score: ${data.combined_score}/100`;
 
   const translateToHindi = async () => {
     if (translated[mode]) { setShowHindi(s => ({ ...s, [mode]: !s[mode] })); return; }
-    return; // Disabled - needs backend integration
+    setTranslating(true);
+    try {
+      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+      const response = await fetch(`${API}/ai/insights`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: `Translate the following text to Hindi. Keep formatting (bold markers **, bullet points •) intact. Only translate the text:\n\n${current}` })
+      });
+      if (!response.ok) throw new Error('Translation failed');
+      const data = await response.json();
+      setTranslated(t => ({ ...t, [mode]: data.result }));
+      setShowHindi(s => ({ ...s, [mode]: true }));
+    } catch (e) {
+      console.error('Translation error:', e);
+    } finally {
+      setTranslating(false);
+    }
   };
 
   const renderText = (text: string) => {
@@ -1426,7 +1491,7 @@ Combined DevIQ Score: ${data.combined_score}/100`;
 /* ─────────────────────────────────────────────────
    COMPARE MODE
 ───────────────────────────────────────────────── */
-function CompareMode({ tk, isMobile }: { tk: Theme; isMobile: boolean }) {
+function CompareMode({ tk, isMobile, onComparison }: { tk: Theme; isMobile: boolean; onComparison?: () => void }) {
   const [devA, setDevA] = useState(() => { try { const s = sessionStorage.getItem("deviq_cmpA"); return s ? JSON.parse(s) : { gh: "", lc: "", cf: "" }; } catch { return { gh: "", lc: "", cf: "" }; } });
   const [devB, setDevB] = useState(() => { try { const s = sessionStorage.getItem("deviq_cmpB"); return s ? JSON.parse(s) : { gh: "", lc: "", cf: "" }; } catch { return { gh: "", lc: "", cf: "" }; } });
   const [dataA, setDataA] = useState<ResultData | null>(() => { try { const s = sessionStorage.getItem("deviq_cmpDataA"); return s ? JSON.parse(s) : null; } catch { return null; } });
@@ -1446,7 +1511,7 @@ function CompareMode({ tk, isMobile }: { tk: Theme; isMobile: boolean }) {
     let s = 0; if (r.github?.analytics?.skill_score) s += r.github.analytics.skill_score * 0.4; if (r.leetcode?.total_solved) s += Math.min(100, r.leetcode.easy_solved + r.leetcode.medium_solved * 3 + r.leetcode.hard_solved * 6) * 0.35; if (r.codeforces?.rating) s += Math.min(100, r.codeforces.rating / 35) * 0.25;
     r.combined_score = Math.round(s * 10) / 10; set(r as ResultData); setL(false);
   };
-  const run = () => { setRan(true); if (devA.gh || devA.lc || devA.cf) fetchDev(devA, setDataA, setLoadingA); if (devB.gh || devB.lc || devB.cf) fetchDev(devB, setDataB, setLoadingB); };
+  const run = () => { setRan(true); if (devA.gh || devA.lc || devA.cf) fetchDev(devA, setDataA, setLoadingA); if (devB.gh || devB.lc || devB.cf) fetchDev(devB, setDataB, setLoadingB); onComparison?.(); };
   const metrics = [{ label: "Dev Score", a: dataA?.combined_score, b: dataB?.combined_score }, { label: "Repos", a: dataA?.github?.analytics?.total_projects, b: dataB?.github?.analytics?.total_projects }, { label: "Stars", a: dataA?.github?.analytics?.total_stars, b: dataB?.github?.analytics?.total_stars }, { label: "LC Solved", a: dataA?.leetcode?.total_solved, b: dataB?.leetcode?.total_solved }, { label: "LC Hard", a: dataA?.leetcode?.hard_solved, b: dataB?.leetcode?.hard_solved }, { label: "CF Rating", a: dataA?.codeforces?.rating, b: dataB?.codeforces?.rating }, { label: "CF Problems", a: dataA?.codeforces?.problems_solved, b: dataB?.codeforces?.problems_solved }];
   const nameA = [devA.gh, devA.lc, devA.cf].filter(Boolean)[0] || "Dev A"; const nameB = [devB.gh, devB.lc, devB.cf].filter(Boolean)[0] || "Dev B";
   const winsA = metrics.filter(m => m.a != null && m.b != null && (m.a as number) > (m.b as number)).length; const winsB = metrics.filter(m => m.a != null && m.b != null && (m.b as number) > (m.a as number)).length;
@@ -1855,13 +1920,23 @@ function ProfilePage({
           <div>
             <h1 style={{ fontSize: isMobile ? 22 : 28, fontWeight: 700, color: tk.text, letterSpacing: "-0.04em", lineHeight: 1.1, marginBottom: 6 }}>{displayName}</h1>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: p?.bio ? 10 : 0 }}>
-              <span style={{ fontSize: 13, color: tk.text2 }}>{user.email}</span>
+              {user.email && !user.email.endsWith("@github.oauth") && <span style={{ fontSize: 13, color: tk.text2 }}>{user.email}</span>}
               <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: tk.bgAlt, border: `1px solid ${tk.border}`, color: tk.text3, textTransform: "capitalize" as const }}>via {user.provider || "email"}</span>
               <span style={{ fontSize: 11, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>Joined {joinDate}</span>
               {p?.location && <span style={{ fontSize: 11, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>{p.location}</span>}
               {p?.website && <a href={p.website.startsWith("http") ? p.website : `https://${p.website}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: tk.blue, display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>{p.website.replace(/^https?:\/\//, "")}</a>}
             </div>
             {p?.bio && <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.65, maxWidth: 500, margin: 0 }}>{p.bio}</p>}
+            <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: p?.bio ? 10 : 6 }}>
+              <button onClick={() => onNavigate("following")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: tk.text }}>{p?.following?.length ?? 0}</span>
+                <span style={{ fontSize: 12, color: tk.text3 }}>Following</span>
+              </button>
+              <button onClick={() => onNavigate("following")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: tk.text }}>{p?.followers?.length ?? 0}</span>
+                <span style={{ fontSize: 12, color: tk.text3 }}>Followers</span>
+              </button>
+            </div>
           </div>
           <button onClick={() => onNavigate("settings")} style={{ padding: "7px 16px", borderRadius: 7, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", fontSize: 12, fontWeight: 500, color: tk.text2, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
@@ -2060,7 +2135,7 @@ function ProfilePage({
             <div style={{ padding: "14px 18px" }}>
               {p?.bio ? <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.65, margin: "0 0 14px" }}>{p.bio}</p> : <p style={{ fontSize: 12, color: tk.text3, lineHeight: 1.6, marginBottom: 14, fontStyle: "italic" as const }}>No bio yet. <button onClick={() => onNavigate("settings")} style={{ color: tk.blue, background: "none", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "inherit", padding: 0 }}>Add one →</button></p>}
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 7l10 8 10-8" /></svg><span style={{ fontSize: 12, color: tk.text2 }}>{user.email}</span></div>
+                {user.email && !user.email.endsWith("@github.oauth") && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 7l10 8 10-8" /></svg><span style={{ fontSize: 12, color: tk.text2 }}>{user.email}</span></div>}
                 {p?.location && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg><span style={{ fontSize: 12, color: tk.text2 }}>{p.location}</span></div>}
                 {p?.website && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg><a href={p.website.startsWith("http") ? p.website : `https://${p.website}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: tk.blue, textDecoration: "none" }}>{p.website.replace(/^https?:\/\//, "")}</a></div>}
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg><span style={{ fontSize: 12, color: tk.text2 }}>Joined {joinDate}</span></div>
@@ -2224,49 +2299,33 @@ The user can ask about:
 Be helpful, concise, and encouraging. Use the profile data to provide personalized insights. If they ask about something not in their profile, suggest they analyze more profiles or follow more developers.`;
 
       // Disabled - needs backend integration
-      throw new Error("Chat temporarily disabled - backend integration needed for security");
-      // if (!GROQ_KEY) {
-      //   throw new Error("Groq API key not configured");
-      // }
+      // throw new Error("Chat temporarily disabled - backend integration needed for security");
 
-      const payload = {
-        model: "llama-3.1-8b-instant",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...messages.slice(-10).map(m => ({ role: m.role, content: m.content })),
-          { role: "user", content: userMessage.content }
-        ],
-        max_tokens: 500,
-        temperature: 0.7
+      const fullPrompt = systemPrompt + "\n\nConversation so far:\n" + 
+        messages.slice(-10).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') +
+        "\nUser: " + userMessage.content + "\nAssistant:";
+
+      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+      const response = await fetch(`${API}/ai/insights`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: fullPrompt })
+      });
+
+      if (!response.ok) throw new Error(`API request failed: ${response.status}`);
+
+      const data = await response.json();
+      const aiResponse = data.result || "Sorry, I couldn't generate a response.";
+
+      const assistantMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: aiResponse,
+        timestamp: new Date()
       };
 
-      // Disabled - needs backend integration
-      // const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      //   method: "POST",
-      //   headers: {
-      //     "Content-Type": "application/json",
-      //     "Authorization": `Bearer ${GROQ_KEY}`
-      //   },
-      //   body: JSON.stringify(payload)
-      // });
-
-      // if (!response.ok) {
-      //   const errorText = await response.text();
-      //   console.error("Groq API error response:", errorText);
-      //   throw new Error(`API request failed: ${response.status} - ${errorText}`);
-      // }
-
-      // const data = await response.json();
-      // const aiResponse = data.choices?.[0]?.message?.content || "Sorry, I couldn't generate a response.";
-
-      // const assistantMessage: ChatMessage = {
-      //   id: (Date.now() + 1).toString(),
-      //   role: "assistant",
-      //   content: aiResponse,
-      //   timestamp: new Date()
-      // };
-
-      // setMessages(prev => [...prev, assistantMessage]);
+      setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
       console.error("Chat error:", error);
       const errorMessage: ChatMessage = {
@@ -2406,6 +2465,16 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
   const [loading, setLoading] = useState(false);
   const [leetcodeUsername, setLeetcodeUsername] = useState("");
 
+  // ── Company Tags state ──
+  const [companyList, setCompanyList] = useState<CompanyInfo[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<string>("");
+  const [companyData, setCompanyData] = useState<CompanyData | null>(null);
+  const [companyLoading, setCompanyLoading] = useState(false);
+  const [companyFilter, setCompanyFilter] = useState<"all" | "Easy" | "Medium" | "Hard">("all");
+  const [companySearch, setCompanySearch] = useState("");
+  const [companyTracking, setCompanyTracking] = useState<{ [slug: string]: string[] }>(p?.companyTracking || {});
+  const [companyTierFilter, setCompanyTierFilter] = useState<"all" | "FAANG" | "Top" | "Mid">("all");
+
   const fetchAndAnalyzeLeetCode = useCallback(async (username: string) => {
     if (!username.trim()) return;
     setLoading(true);
@@ -2531,6 +2600,119 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
       onProfileSave(updatedProfile);
     }
   };
+
+  // ── Company Tags Logic ──
+  const defaultCompanies: CompanyInfo[] = [
+    { name: "Google", slug: "google", icon: "G", tier: "FAANG", logo: "https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg" },
+    { name: "Amazon", slug: "amazon", icon: "A", tier: "FAANG", logo: "https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg" },
+    { name: "Meta", slug: "facebook", icon: "M", tier: "FAANG", logo: "https://upload.wikimedia.org/wikipedia/commons/6/6b/Meta_Platforms_Logo.svg" },
+    { name: "Apple", slug: "apple", icon: "Ap", tier: "FAANG", logo: "https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg" },
+    { name: "Netflix", slug: "netflix", icon: "N", tier: "FAANG", logo: "https://upload.wikimedia.org/wikipedia/commons/0/08/Netflix_2015_logo.svg" },
+    { name: "Microsoft", slug: "microsoft", icon: "Ms", tier: "FAANG", logo: "https://upload.wikimedia.org/wikipedia/commons/4/44/Microsoft_logo.svg" },
+    { name: "Bloomberg", slug: "bloomberg", icon: "Bl", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/2/2a/Bloomberg_logo.svg" },
+    { name: "Goldman Sachs", slug: "goldman-sachs", icon: "GS", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/7/7a/Goldman_Sachs_Logo.svg" },
+    { name: "Uber", slug: "uber", icon: "Ub", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/c/cc/Uber_logo_2018.svg" },
+    { name: "LinkedIn", slug: "linkedin", icon: "Li", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/c/c9/Linkedin.svg" },
+    { name: "Adobe", slug: "adobe", icon: "Ad", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/4/4e/Adobe_Corporate_Logo.svg" },
+    { name: "Oracle", slug: "oracle", icon: "Or", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/5/5c/Oracle_logo.svg" },
+    { name: "Salesforce", slug: "salesforce", icon: "Sf", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/5/5b/Salesforce_logo.svg" },
+    { name: "Twitter", slug: "twitter", icon: "Tw", tier: "Top", logo: "https://upload.wikimedia.org/wikipedia/commons/4/4f/Twitter-logo.svg" },
+    { name: "Spotify", slug: "spotify", icon: "Sp", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/1/19/Spotify_logo.svg" },
+    { name: "Stripe", slug: "stripe", icon: "St", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/4/41/Stripe_Logo%2C_revised_2016.svg" },
+    { name: "Airbnb", slug: "airbnb", icon: "Ab", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/6/69/Airbnb_Logo_B%C3%A9lo.svg" },
+    { name: "Snap", slug: "snapchat", icon: "Sn", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/en/6/60/Snapchat_logo.svg" },
+    { name: "TikTok", slug: "tiktok", icon: "Tk", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/6/69/Tiktok_logo.svg" },
+    { name: "Nvidia", slug: "nvidia", icon: "Nv", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/2/21/Nvidia_logo.svg" },
+    { name: "PayPal", slug: "paypal", icon: "Pp", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/b/b5/PayPal.svg" },
+    { name: "Cisco", slug: "cisco", icon: "Cs", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/6/6d/Cisco_logo_blue_2016.svg" },
+    { name: "VMware", slug: "vmware", icon: "Vm", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/9/9e/VMware_logo.svg" },
+    { name: "Walmart", slug: "walmart", icon: "Wm", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/c/ca/Walmart_logo.svg" },
+    { name: "JPMorgan", slug: "jpmorgan", icon: "JP", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/3/3e/JPMorgan_Chase_logo.svg" },
+    { name: "Samsung", slug: "samsung", icon: "Sm", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/2/24/Samsung_Logo.svg" },
+    { name: "Intuit", slug: "intuit", icon: "In", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/7/7a/Intuit_logo.svg" },
+    { name: "Yahoo", slug: "yahoo", icon: "Ya", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/2/24/Yahoo%21_logo.svg" },
+  ];
+
+  useEffect(() => {
+    // Set companies immediately so they always render
+    setCompanyList(defaultCompanies);
+    // Then try to fetch from API for any updates
+    (async () => {
+      try {
+        const res = await fetch(`${API}/leetcode/companies`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.companies && data.companies.length > 0) {
+            setCompanyList(data.companies);
+          }
+        }
+      } catch {
+        // Already using defaults, nothing to do
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (p?.companyTracking) setCompanyTracking(p.companyTracking);
+  }, [p]);
+
+  const fetchCompanyProblems = useCallback(async (slug: string) => {
+    if (!slug) return;
+    setCompanyLoading(true);
+    setCompanyData(null);
+    try {
+      const res = await fetch(`${API}/leetcode/company-problems/${slug}`);
+      if (res.ok) {
+        const data: CompanyData = await res.json();
+        setCompanyData(data);
+      } else {
+        // Try fallback: show a friendly message and empty data
+        setCompanyData({
+          company: slug,
+          slug,
+          total_problems: 0,
+          problems: [],
+          last_updated: new Date().toISOString(),
+        });
+      }
+    } catch {
+      setCompanyData({
+        company: slug,
+        slug,
+        total_problems: 0,
+        problems: [],
+        last_updated: new Date().toISOString(),
+      });
+    } finally {
+      setCompanyLoading(false);
+    }
+  }, []);
+
+  const toggleCompanyProblemSolved = useCallback((companySlug: string, problemSlug: string) => {
+    setCompanyTracking(prev => {
+      const arr = prev[companySlug] || [];
+      const updated = arr.includes(problemSlug)
+        ? arr.filter(s => s !== problemSlug)
+        : [...arr, problemSlug];
+      const newTracking = { ...prev, [companySlug]: updated };
+      if (p) {
+        onProfileSave({ ...p, companyTracking: newTracking });
+      }
+      return newTracking;
+    });
+  }, [p, onProfileSave]);
+
+  const filteredCompanyList = companyList.filter(c =>
+    (companyTierFilter === "all" || c.tier === companyTierFilter)
+  );
+
+  const filteredProblems = (companyData?.problems || []).filter(prob => {
+    if (companyFilter !== "all" && prob.difficulty !== companyFilter) return false;
+    if (companySearch && !prob.title.toLowerCase().includes(companySearch.toLowerCase()) && !prob.topicTags.some(t => t.toLowerCase().includes(companySearch.toLowerCase()))) return false;
+    return true;
+  });
+
+  const companySolvedCount = (slug: string) => (companyTracking[slug] || []).length;
 
   return (
     <div className="fu">
@@ -2683,6 +2865,209 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
           </div>
         </div>
       )}
+
+      {/* ─────────── COMPANY TAGS TRACKER ─────────── */}
+      <div style={{ marginTop: 48, paddingTop: 32, borderTop: `1px solid ${tk.border}` }}>
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 8 }}>Company Tags</div>
+          <h2 style={{ fontSize: isMobile ? 22 : 28, fontWeight: 700, letterSpacing: "-0.03em", color: tk.text, lineHeight: 1.1, marginBottom: 4 }}>Company-Tagged Problems</h2>
+          <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.4, margin: 0 }}>Browse problems frequently asked at top tech companies. Select a company below to view their question list and track your progress.</p>
+        </div>
+
+        {/* Tier filter pills */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" as const }}>
+          {(["all", "FAANG", "Top", "Mid"] as const).map(tier => (
+            <button key={tier} onClick={() => setCompanyTierFilter(tier)} style={{
+              padding: "6px 14px", borderRadius: 20, border: `1px solid ${companyTierFilter === tier ? tk.blue : tk.border}`,
+              background: companyTierFilter === tier ? tk.blueLight : tk.surface, color: companyTierFilter === tier ? tk.blue : tk.text2,
+              fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s"
+            }}>
+              {tier === "all" ? "All Companies" : tier === "FAANG" ? "FAANG+" : tier === "Top" ? "Top Tier" : "Mid Tier"}
+            </button>
+          ))}
+        </div>
+
+        {/* Company grid */}
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(160px, 1fr))", gap: 10, marginBottom: 24 }}>
+          {filteredCompanyList.map(c => {
+            const solved = companySolvedCount(c.slug);
+            const isSelected = selectedCompany === c.slug;
+            return (
+              <button key={c.slug} onClick={() => { setSelectedCompany(c.slug); fetchCompanyProblems(c.slug); }} style={{
+                padding: "14px 12px", borderRadius: 10, border: `1.5px solid ${isSelected ? tk.blue : tk.border}`,
+                background: isSelected ? tk.blueLight : tk.surface, cursor: "pointer", textAlign: "left" as const,
+                transition: "all 0.15s", position: "relative" as const
+              }}>
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: isSelected ? tk.blue : tk.bgAlt, color: isSelected ? tk.accentFg : tk.text2, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, marginBottom: 6, border: `1px solid ${isSelected ? tk.blue : tk.border}` }}>
+                  {c.icon}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: isSelected ? tk.blue : tk.text, marginBottom: 2 }}>{c.name}</div>
+                <div style={{ fontSize: 11, color: tk.text3 }}>
+                  {solved > 0 ? <span style={{ color: tk.green }}>{solved} solved</span> : c.tier}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Selected company problems */}
+        {companyLoading && (
+          <div style={{ padding: 40, textAlign: "center", color: tk.text3 }}>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>Loading problems...</div>
+            <div style={{ width: 40, height: 40, border: `3px solid ${tk.border}`, borderTopColor: tk.blue, borderRadius: "50%", margin: "0 auto", animation: "spin 1s linear infinite" }} />
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        )}
+
+        {companyData && !companyLoading && (
+            <div style={{ border: `1px solid ${tk.border}`, borderRadius: 12, overflow: "hidden" }}>
+            {/* Company header */}
+            <div style={{ padding: "16px 20px", background: tk.bgAlt, borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {/* Company logo */}
+                {(() => {
+                  const info = companyList.find(c => c.slug === selectedCompany);
+                  if (info) {
+                    return <div style={{ width: 32, height: 32, borderRadius: 6, background: tk.bgAlt, color: tk.text2, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700 }}>{info.icon}</div>;
+                  }
+                  return null;
+                })()}
+                <div>
+                  <h3 style={{ fontSize: 18, fontWeight: 700, color: tk.text, margin: 0, marginBottom: 4 }}>
+                    {companyData.company}
+                  </h3>
+                  <div style={{ fontSize: 12, color: tk.text3 }}>
+                    {companyData.total_problems} problems • {companySolvedCount(selectedCompany)} solved
+                    {companyData.total_problems > 0 && (
+                      <span style={{ marginLeft: 8, color: tk.blue, fontWeight: 600 }}>
+                        ({Math.round((companySolvedCount(selectedCompany) / companyData.total_problems) * 100)}%)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {/* Progress ring */}
+              <div style={{ position: "relative" as const, width: 48, height: 48 }}>
+                <svg width="48" height="48" viewBox="0 0 48 48">
+                  <circle cx="24" cy="24" r="20" fill="none" stroke={tk.border} strokeWidth="4" />
+                  <circle cx="24" cy="24" r="20" fill="none" stroke={tk.green} strokeWidth="4"
+                    strokeDasharray={`${(companySolvedCount(selectedCompany) / Math.max(1, companyData.total_problems)) * 125.6} 125.6`}
+                    strokeLinecap="round" transform="rotate(-90 24 24)" />
+                </svg>
+                <div style={{ position: "absolute" as const, inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: tk.text }}>
+                  {companyData.total_problems > 0 ? Math.round((companySolvedCount(selectedCompany) / companyData.total_problems) * 100) : 0}%
+                </div>
+              </div>
+            </div>
+
+            {/* Filters */}
+            <div style={{ padding: "12px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" as const }}>
+              <input
+                type="text"
+                value={companySearch}
+                onChange={e => setCompanySearch(e.target.value)}
+                placeholder="Search problems or topics..."
+                style={{ flex: 1, minWidth: 160, padding: "8px 12px", border: `1px solid ${tk.border}`, borderRadius: 6, background: tk.bg, color: tk.text, fontSize: 13, outline: "none" }}
+              />
+              {(["all", "Easy", "Medium", "Hard"] as const).map(d => (
+                <button key={d} onClick={() => setCompanyFilter(d)} style={{
+                  padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+                  border: `1px solid ${companyFilter === d ? (d === "Easy" ? tk.green : d === "Medium" ? tk.amber : d === "Hard" ? tk.rose : tk.blue) : tk.border}`,
+                  background: companyFilter === d ? (d === "Easy" ? tk.greenLight : d === "Medium" ? tk.amberLight : d === "Hard" ? tk.roseLight : tk.blueLight) : tk.surface,
+                  color: companyFilter === d ? (d === "Easy" ? tk.green : d === "Medium" ? tk.amber : d === "Hard" ? tk.rose : tk.blue) : tk.text3
+                }}>
+                  {d === "all" ? `All (${companyData.problems.length})` : d}
+                </button>
+              ))}
+            </div>
+            {companyData.total_problems === 0 && companyData.problems.length === 0 && (
+              <div style={{ padding: 32, textAlign: "center", color: tk.text3, fontSize: 14 }}>
+                Could not load problems for this company.<br />
+                Please try another company or check your backend connection.
+              </div>
+            )}
+
+            {/* Difficulty breakdown bar */}
+            <div style={{ padding: "8px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", gap: 16, fontSize: 12 }}>
+              {(["Easy", "Medium", "Hard"] as const).map(d => {
+                const count = companyData.problems.filter(p => p.difficulty === d).length;
+                const solvedCount = (companyTracking[selectedCompany] || []).filter(slug => companyData.problems.find(p => p.slug === slug && p.difficulty === d)).length;
+                return (
+                  <span key={d} style={{ color: d === "Easy" ? tk.green : d === "Medium" ? tk.amber : tk.rose }}>
+                    {d}: <strong>{solvedCount}/{count}</strong>
+                  </span>
+                );
+              })}
+            </div>
+
+            {/* Problem list */}
+            <div style={{ maxHeight: 480, overflowY: "auto" as const }}>
+              {filteredProblems.length === 0 ? (
+                <div style={{ padding: 32, textAlign: "center", color: tk.text3, fontSize: 13 }}>No problems match your filters.</div>
+              ) : (
+                filteredProblems.map((prob, i) => {
+                  const isSolved = (companyTracking[selectedCompany] || []).includes(prob.slug);
+                  return (
+                    <div key={prob.slug} style={{
+                      padding: "12px 20px", borderBottom: i < filteredProblems.length - 1 ? `1px solid ${tk.border}` : "none",
+                      display: "flex", alignItems: "center", gap: 12, background: isSolved ? (tk.greenLight) : "transparent",
+                      transition: "background 0.15s"
+                    }}>
+                      {/* Solved checkbox */}
+                      <button onClick={() => toggleCompanyProblemSolved(selectedCompany, prob.slug)} style={{
+                        width: 22, height: 22, borderRadius: 6, border: `2px solid ${isSolved ? tk.green : tk.border}`,
+                        background: isSolved ? tk.green : "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+                        flexShrink: 0, transition: "all 0.15s", padding: 0
+                      }}>
+                        {isSolved && <span style={{ color: "#fff", fontSize: 13, lineHeight: 1 }}>✓</span>}
+                      </button>
+
+                      {/* Problem info */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                          <span style={{ fontSize: 12, color: tk.text3, fontFamily: "monospace", flexShrink: 0 }}>#{prob.id}</span>
+                          <a href={prob.url} target="_blank" rel="noopener noreferrer" style={{
+                            fontSize: 13, fontWeight: 600, color: isSolved ? tk.green : tk.text, textDecoration: isSolved ? "line-through" : "none",
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const
+                          }}>
+                            {prob.title}
+                          </a>
+                          {prob.paidOnly && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: tk.amberLight, color: tk.amber, fontWeight: 700, border: `1px solid ${tk.amberBorder}`, flexShrink: 0 }}>Premium</span>}
+                        </div>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" as const }}>
+                          {prob.topicTags.slice(0, 3).map(tag => (
+                            <span key={tag} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: tk.bgAlt, color: tk.text3, border: `1px solid ${tk.border}` }}>{tag}</span>
+                          ))}
+                          {prob.topicTags.length > 3 && <span style={{ fontSize: 10, color: tk.text3 }}>+{prob.topicTags.length - 3}</span>}
+                        </div>
+                      </div>
+
+                      {/* Difficulty badge */}
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, flexShrink: 0,
+                        background: prob.difficulty === "Hard" ? tk.roseLight : prob.difficulty === "Medium" ? tk.amberLight : tk.greenLight,
+                        color: prob.difficulty === "Hard" ? tk.rose : prob.difficulty === "Medium" ? tk.amber : tk.green,
+                        border: `1px solid ${prob.difficulty === "Hard" ? tk.roseBorder : prob.difficulty === "Medium" ? tk.amberBorder : tk.greenBorder}`
+                      }}>
+                        {prob.difficulty}
+                      </span>
+
+                      {/* Frequency indicator */}
+                      {prob.frequency > 0 && (
+                        <div style={{ width: 40, flexShrink: 0, textAlign: "right" as const }} title={`Frequency: ${prob.frequency}%`}>
+                          <div style={{ height: 4, background: tk.bgAlt, borderRadius: 2, overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${prob.frequency}%`, background: tk.blue, borderRadius: 2 }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2696,15 +3081,17 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
 }) {
   const p = profile;
   const [following, setFollowing] = useState<FollowedUser[]>(p?.following || []);
+  const [followers, setFollowers] = useState<FollowedUser[]>(p?.followers || []);
   const [notifications, setNotifications] = useState<Notification[]>(p?.notifications || []);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<FollowedUser[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [activeTab, setActiveTab] = useState<"following" | "notifications">("following");
+  const [activeTab, setActiveTab] = useState<"following" | "followers" | "notifications">("following");
 
   useEffect(() => {
     if (p) {
       setFollowing(p.following || []);
+      setFollowers(p.followers || []);
       setNotifications(p.notifications || []);
     }
   }, [p]);
@@ -2766,6 +3153,13 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
     onProfileSave(updatedProfile);
   };
 
+  const removeFollower = (username: string, platform: string) => {
+    const updated = followers.filter(f => !(f.username === username && f.platform === platform));
+    setFollowers(updated);
+    const updatedProfile = { ...p!, followers: updated };
+    onProfileSave(updatedProfile);
+  };
+
   const isFollowing = (username: string, platform: string) => {
     return following.some(f => f.username === username && f.platform === platform);
   };
@@ -2781,6 +3175,7 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
 
   const tabs = [
     { id: "following" as const, label: "Following", count: following.length },
+    { id: "followers" as const, label: "Followers", count: followers.length },
     { id: "notifications" as const, label: "Notifications", count: unreadCount }
   ];
 
@@ -2788,8 +3183,8 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
     <div className="fu">
       <div style={{ padding: isMobile ? "36px 0 28px" : "56px 0 40px", borderBottom: `1px solid ${tk.border}`, marginBottom: 24 }}>
         <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 12 }}>Social Network</div>
-        <h1 style={{ fontSize: isMobile ? 28 : 38, fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>Following & Notifications</h1>
-        <p style={{ fontSize: 15, color: tk.text2, lineHeight: 1.65, marginTop: 8 }}>Follow developers and get notified when their scores change.</p>
+        <h1 style={{ fontSize: isMobile ? 28 : 38, fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>Following & Followers</h1>
+        <p style={{ fontSize: 15, color: tk.text2, lineHeight: 1.65, marginTop: 8 }}>Follow developers, see your followers, and get notified when scores change.</p>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 24, borderBottom: `1px solid ${tk.border}`, paddingBottom: 16 }}>
@@ -2887,6 +3282,61 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
                   >
                     Unfollow
                   </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === "followers" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
+            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 15, fontWeight: 600, color: tk.text }}>Followers ({followers.length})</span>
+            </div>
+            {followers.length === 0 ? (
+              <div style={{ padding: "48px 20px", textAlign: "center" }}>
+                <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", fontSize: 20, color: tk.text3 }}>👤</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: tk.text, marginBottom: 8 }}>No followers yet</div>
+                <div style={{ fontSize: 13, color: tk.text2, lineHeight: 1.6 }}>When other developers follow you, they will appear here.<br/>Share your profile to grow your network!</div>
+              </div>
+            ) : (
+              followers.map((follower, i) => (
+                <div key={`${follower.platform}-${follower.username}`} style={{ padding: "16px 20px", borderBottom: i < followers.length - 1 ? `1px solid ${tk.border}` : "none", display: "flex", alignItems: "center", justifyContent: "space-between", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {follower.avatar ? (
+                      <img src={follower.avatar} alt={follower.username} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
+                    ) : (
+                      <div style={{ width: 40, height: 40, borderRadius: "50%", background: tk.teal, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 600, color: "#fff" }}>
+                        {initial(follower.username)}
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 600, color: tk.text }}>{follower.username}</div>
+                      <div style={{ fontSize: 12, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}>
+                        <PlatformIcon platform={follower.platform} size={12} color={tk.blue} />
+                        {follower.platform}
+                        {follower.lastScore != null && <span>• Score: {follower.lastScore.toFixed(1)}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {!isFollowing(follower.username, follower.platform) && (
+                      <button
+                        onClick={() => followUser(follower)}
+                        style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 12, fontWeight: 500 }}
+                      >
+                        Follow Back
+                      </button>
+                    )}
+                    <button
+                      onClick={() => removeFollower(follower.username, follower.platform)}
+                      style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${tk.border}`, background: "transparent", color: tk.text3, cursor: "pointer", fontSize: 12, fontWeight: 500 }}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -3069,9 +3519,26 @@ function SettingsPage({
       console.error('Pull error stack:', err?.stack);
       const errorMsg = err?.message || String(err);
       
-      // Check for authentication errors
-      if (errorMsg.includes('Invalid token') || errorMsg.includes('Unauthorized')) {
-        setSyncMessage({ text: '✗ Session expired. Please log in again.', type: 'error' });
+      // Check for authentication errors - try to re-authenticate
+      if (errorMsg.includes('Invalid token') || errorMsg.includes('Unauthorized') || errorMsg.includes('401') || errorMsg.includes('expired')) {
+        // Clear stale token and try re-authenticating with stored user info
+        localStorage.removeItem('auth_token');
+        const session = loadSession();
+        if (session?.email) {
+          try {
+            const refreshed = await apiOAuth({ name: session.name || '', email: session.email, avatar: session.avatar, provider: session.provider || 'google' });
+            if (refreshed) {
+              // Retry the pull with fresh token
+              await onPullLatest();
+              setSyncMessage({ text: '✓ Pulled latest from cloud! Profile updated.', type: 'success' });
+              setTimeout(() => setSyncMessage(null), 4000);
+              return;
+            }
+          } catch {
+            // Re-auth failed too
+          }
+        }
+        setSyncMessage({ text: '✗ Session expired. Please log out and log in again.', type: 'error' });
       } else {
         setSyncMessage({ text: `✗ Pull failed: ${errorMsg}`, type: 'error' });
       }
@@ -3285,9 +3752,31 @@ export default function Page() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
+
+  // ── Close user menu on click outside ──
+  useEffect(() => {
+    if (!userMenuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setUserMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [userMenuOpen]);
+
+  // ── Real-time sync refs ──
+  const profileRef = useRef<UserProfile | null>(null);
+  const lastPulledHashRef = useRef<string>('');
+  const autoSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isSyncingRef = useRef(false);
+
+  // Keep profileRef in sync with state
+  useEffect(() => { profileRef.current = profile; }, [profile]);
 
   useEffect(() => {
     const init = async () => {
@@ -3310,7 +3799,8 @@ export default function Page() {
             const remoteProfile = await apiGetProfile();
             const localProfile = loadProfile(mergedUser.email);
             const p = mergeProfilePreferNonEmpty(remoteProfile, localProfile);
-            if (!p.displayName) p.displayName = mergedUser.name;
+            // Only use OAuth name as a last resort for brand-new users (no profile anywhere)
+            if (!p.displayName && !localProfile?.displayName) p.displayName = mergedUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
             if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
             if (!mergedUser.avatar && p.avatar) {
@@ -3326,7 +3816,6 @@ export default function Page() {
             if (err?.message === 'NOT_MODIFIED') {
               console.log('📦 Using cached profile (server confirms it\'s current)');
               const p = loadProfile(mergedUser.email);
-              if (!p.displayName) p.displayName = mergedUser.name;
               if (!p.joinedAt) p.joinedAt = new Date().toISOString();
               if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
               setProfile(p);
@@ -3334,7 +3823,6 @@ export default function Page() {
               // fallback to localStorage profile if server fails
               console.log('⚠️ Backend unreachable, using cached profile');
               const p = loadProfile(mergedUser.email);
-              if (!p.displayName) p.displayName = mergedUser.name;
               if (!p.joinedAt) p.joinedAt = new Date().toISOString();
               if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
               setProfile(p);
@@ -3345,7 +3833,6 @@ export default function Page() {
           if (savedUser) {
             setUser(savedUser);
             const p = loadProfile(savedUser.email);
-            if (!p.displayName) p.displayName = savedUser.name;
             if (!p.joinedAt) p.joinedAt = new Date().toISOString();
             saveProfile(savedUser.email, p); setProfile(p);
 
@@ -3386,41 +3873,38 @@ export default function Page() {
     init();
   }, []);
 
-  // Periodic profile sync - check for updates from other devices every 2 minutes
+  // ── Auto-PULL: Poll server for updates from other devices every 15 seconds ──
   useEffect(() => {
     if (!user) return;
 
-    const refreshProfile = async () => {
+    const pullFromCloud = async () => {
+      if (isSyncingRef.current) return; // Skip if currently pushing
       try {
-        console.log('🔄 Checking for profile updates from other devices...');
-        const latestProfileRemote = await apiGetProfile();
-        const latestProfile = mergeProfilePreferNonEmpty(latestProfileRemote, profile || loadProfile(user.email));
-        
-        // Compare with current profile to see if there are changes
-        const hasChanges = JSON.stringify(latestProfile) !== JSON.stringify(profile);
-        
-        if (hasChanges) {
-          console.log('✨ Profile updated from another device!');
-          if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
+        const latestRemote = await apiGetProfile();
+        const current = profileRef.current || loadProfile(user.email);
+        const latestProfile = mergeProfilePreferNonEmpty(latestRemote, current);
+        const latestHash = JSON.stringify(latestProfile);
+        const currentHash = JSON.stringify(current);
+
+        if (latestHash !== currentHash) {
+          console.log('✨ Profile updated from another device — auto-syncing!');
           if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
           if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
-          
+          lastPulledHashRef.current = JSON.stringify(latestProfile);
           setProfile(latestProfile);
           saveProfile(user.email, latestProfile);
         }
-      } catch (err) {
-        console.log('⏭️ Profile sync check skipped (offline or not authenticated)');
+      } catch {
+        // Silently skip — offline or unauthenticated
       }
     };
 
-    // Check for updates every 2 minutes
-    const interval = setInterval(refreshProfile, 120000);
-    
-    // Also check when tab becomes visible (user switches back to the app)
+    // Poll every 15 seconds for near-real-time cross-device sync
+    const interval = setInterval(pullFromCloud, 15000);
+
+    // Also pull immediately when tab becomes visible
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refreshProfile();
-      }
+      if (document.visibilityState === 'visible') pullFromCloud();
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
@@ -3428,7 +3912,38 @@ export default function Page() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [user, profile]);
+  }, [user]);
+
+  // ── Auto-PUSH: Debounce-sync local profile changes to cloud ──
+  useEffect(() => {
+    if (!user || !profile) return;
+
+    const profileHash = JSON.stringify(profile);
+    // Don't re-push data that was just pulled from the server
+    if (profileHash === lastPulledHashRef.current) return;
+
+    // Debounce: wait 3 seconds after last local change before pushing
+    if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
+    autoSyncTimerRef.current = setTimeout(async () => {
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
+      try {
+        console.log('☁️  Auto-pushing profile changes to cloud…');
+        const saved = await syncProfile(user.email, profile);
+        lastPulledHashRef.current = JSON.stringify(saved);
+        // Don't setProfile here — it would loop; local state is already correct
+        saveProfile(user.email, saved);
+      } catch {
+        console.log('⚠️  Auto-push failed — will retry next cycle');
+      } finally {
+        isSyncingRef.current = false;
+      }
+    }, 3000);
+
+    return () => {
+      if (autoSyncTimerRef.current) clearTimeout(autoSyncTimerRef.current);
+    };
+  }, [profile, user]);
 
   const handleLogin = async (u: AuthUser) => {
     const mergedUser = enrichAuthUser(u);
@@ -3440,7 +3955,7 @@ export default function Page() {
       const remoteProfile = await apiGetProfile();
       const localProfile = loadProfile(mergedUser.email);
       const p = mergeProfilePreferNonEmpty(remoteProfile, localProfile);
-      if (!p.displayName) p.displayName = mergedUser.name;
+      if (!p.displayName && !localProfile?.displayName) p.displayName = mergedUser.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
       if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
       // Save backend data to localStorage for offline access
@@ -3449,7 +3964,6 @@ export default function Page() {
     } catch {
       // Backend failed - load from localStorage and sync to backend
       const p = loadProfile(mergedUser.email);
-      if (!p.displayName) p.displayName = mergedUser.name;
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
       if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
       // Try to sync local data to backend for future use
@@ -3464,32 +3978,48 @@ export default function Page() {
   };
   const handleProfileSave = async (updated: UserProfile) => {
     if (!user) return;
+    isSyncingRef.current = true;
     try {
       const saved = await syncProfile(user.email, updated);
+      lastPulledHashRef.current = JSON.stringify(saved);
       setProfile(saved);
     } catch {
       setProfile(updated);
+    } finally {
+      isSyncingRef.current = false;
     }
     if (updated.displayName && updated.displayName !== user.name) { const u2 = { ...user, name: updated.displayName }; setUser(u2); saveSession(u2); }
   };
 
   const handleProfileSaveStrict = async (updated: UserProfile) => {
     if (!user) throw new Error('Not logged in');
-    const saved = await syncProfile(user.email, updated, true);
-    setProfile(saved);
-    if (saved.displayName && saved.displayName !== user.name) {
-      const u2 = { ...user, name: saved.displayName };
-      setUser(u2);
-      saveSession(u2);
+    isSyncingRef.current = true;
+    try {
+      const saved = await syncProfile(user.email, updated, true);
+      lastPulledHashRef.current = JSON.stringify(saved);
+      setProfile(saved);
+      if (saved.displayName && saved.displayName !== user.name) {
+        const u2 = { ...user, name: saved.displayName };
+        setUser(u2);
+        saveSession(u2);
+      }
+    } finally {
+      isSyncingRef.current = false;
     }
   };
 
   const handleSyncNow = async () => {
     if (!user || !profile) throw new Error('Not logged in');
     console.log('🚀 Manual sync triggered');
-    const saved = await syncProfile(user.email, profile);
-    setProfile(saved);
-    saveProfile(user.email, saved);
+    isSyncingRef.current = true;
+    try {
+      const saved = await syncProfile(user.email, profile);
+      lastPulledHashRef.current = JSON.stringify(saved);
+      setProfile(saved);
+      saveProfile(user.email, saved);
+    } finally {
+      isSyncingRef.current = false;
+    }
   };
 
   const handlePullLatest = async () => {
@@ -3512,9 +4042,9 @@ export default function Page() {
         location: profile?.location,
         recentAnalyses: profile?.recentAnalyses?.length || 0
       });
-      if (!latestProfile.displayName && user.name) latestProfile.displayName = user.name;
       if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
       if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
+      lastPulledHashRef.current = JSON.stringify(latestProfile);
       setProfile(latestProfile);
       saveProfile(user.email, latestProfile);
       console.log('✅ Profile state updated to:', {
@@ -3987,7 +4517,7 @@ export default function Page() {
                 <button onClick={() => setAuthModal("signup")} style={{ padding: "5px 13px", borderRadius: 6, border: "none", background: tk.accent, cursor: "pointer", fontSize: 12, fontWeight: 600, color: tk.accentFg }}>Sign up</button>
               </>)}
               {!isMobile && user && (
-                <div style={{ position: "relative" }}>
+                <div ref={userMenuRef} style={{ position: "relative" }}>
                   <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
                     {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
                     <div style={{ width: 24, height: 24, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
@@ -4024,7 +4554,7 @@ export default function Page() {
                 </div>
               )}
               {isMobile && user && (
-                <div style={{ position: "relative" }}>
+                <div ref={userMenuRef} style={{ position: "relative" }}>
                   <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 3px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
                     {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
                     <div style={{ width: 22, height: 22, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
@@ -4196,7 +4726,7 @@ export default function Page() {
                   </PlatformCard>
                 </div>
                 <DeveloperCard data={data} gh={gh} lc={lc} cf={cf} tk={tk} dark={dark} />
-                <AIPanel data={data} gh={gh} lc={lc} cf={cf} tk={tk} dark={dark} />
+                <AIPanel data={data} gh={gh} lc={lc} cf={cf} tk={tk} dark={dark} onAiInsight={() => { if (user) { const p = loadProfile(user.email); p.aiInsightsRun = (p.aiInsightsRun || 0) + 1; saveProfile(user.email, p); setProfile({ ...p }); } }} />
                 {gh && data.github && <ContributionHeatmap username={gh.trim()} tk={tk} dark={dark} />}
                 {data.github?.advancedAnalytics && (
                   <AdvancedAnalyticsCard
@@ -4229,7 +4759,7 @@ export default function Page() {
               <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: tk.text3, marginBottom: 12 }}>Head-to-Head</div>
               <h1 style={{ fontSize: isMobile ? "clamp(28px,9vw,42px)" : "clamp(34px,5vw,50px)", fontWeight: 600, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>Compare two developers.</h1>
             </div>
-            <CompareMode tk={tk} isMobile={isMobile} />
+            <CompareMode tk={tk} isMobile={isMobile} onComparison={() => { if (user) { const p = loadProfile(user.email); p.comparisonsRun = (p.comparisonsRun || 0) + 1; saveProfile(user.email, p); setProfile({ ...p }); } }} />
           </>)}
 
           {/* HISTORY */}

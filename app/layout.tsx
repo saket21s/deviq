@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import SPARedirect from "./SPARedirect";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -24,25 +25,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              // GitHub Pages SPA redirect handler
-              (function() {
-                var redirect = sessionStorage.redirect;
-                delete sessionStorage.redirect;
-                if (redirect && redirect !== location.href) {
-                  history.replaceState(null, '', redirect);
-                }
-              })();
-            `,
-          }}
-        />
-      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
+        <SPARedirect />
         {children}
       </body>
     </html>
