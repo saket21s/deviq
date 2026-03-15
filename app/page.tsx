@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
 
 // API base: Direct backend URL for static deployment
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com'
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com' 
 
 // Secrets removed - these operations should be done via backend API
 // const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
