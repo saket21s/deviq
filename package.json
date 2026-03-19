@@ -10,7 +10,7 @@
     "electron": "electron .",
     "export": "next build && cp public/404.html out/404.html",
     "deploy": "gh-pages -d out -t -f",
-    "predeploy": "next build"
+    "predeploy": "next build && cp public/404.html out/404.html"
   },
   "dependencies": {
     "@capacitor/android": "^8.1.0",

@@ -1,5 +1,19 @@
 "use client";
 import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
+import { Line } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
+} from "chart.js";
+
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
 // API base: Direct backend URL for static deployment
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com' 
@@ -25,7 +39,7 @@ interface ConnectedAccount {
   last_synced_at: string;
 }
 interface StepItem { label: string; status: "pending" | "active" | "done" | "error"; }
-interface RepoItem { name: string; stars: number; forks: number; language?: string; }
+interface RepoItem { name: string; stars: number; forks: number; language?: string; description?: string; topics?: string[]; }
 interface GithubAnalytics {
   total_projects: number; total_stars: number; recent_projects: number;
   skill_score: number; most_used_language?: string;
@@ -126,8 +140,9 @@ interface StoredUser { name: string; email: string; password: string; avatar?: s
 interface AnalysisRecord {
   id: string; date: string; github?: string; leetcode?: string; codeforces?: string;
   score: number; ghStars?: number; ghRepos?: number; ghLang?: string;
+  ghLangs?: Record<string, number>;
   lcSolved?: number; lcEasy?: number; lcMedium?: number; lcHard?: number;
-  cfRating?: number; cfRank?: string;
+  cfRating?: number; cfRank?: string; cfProblemsSolved?: number; cfContests?: number;
 }
 interface FollowedUser {
   username: string; platform: "github" | "leetcode" | "codeforces";
@@ -1132,7 +1147,7 @@ function DeveloperCard({ data, gh, lc, cf, tk, dark }: { data: ResultData; gh: s
       // Create LinkedIn share post text
       const rank = getRank(data.combined_score, tk);
       const platforms = [gh && `GitHub: ${gh}`, lc && `LeetCode: ${lc}`, cf && `Codeforces: ${cf}`].filter(Boolean).join(" | ");
-      const shareText = `🎯 Just analyzed my developer profile on DevIQ!\n\n📊 ${platforms}\n💪 Dev Score: ${data.combined_score.toFixed(1)}/100 (${rank.label})\n\n${data.github?.analytics?.total_projects ? `📦 ${data.github.analytics.total_projects} projects` : ""}${data.leetcode?.total_solved ? ` | ⚡ ${data.leetcode.total_solved} problems solved` : ""}${data.codeforces?.rating ? ` | 🏆 CF Rating: ${data.codeforces.rating}` : ""}\n\nCheck out my full profile and compare your score 👇`;
+      const shareText = `Just analyzed my developer profile on DevIQ!\n\n${platforms}\nDev Score: ${data.combined_score.toFixed(1)}/100 (${rank.label})\n\n${data.github?.analytics?.total_projects ? `${data.github.analytics.total_projects} projects` : ""}${data.leetcode?.total_solved ? ` | ${data.leetcode.total_solved} problems solved` : ""}${data.codeforces?.rating ? ` | CF Rating: ${data.codeforces.rating}` : ""}\n\nCheck out my full profile and compare your score:`;
 
       // LinkedIn share URL (using LinkedIn's native share)
       const linkedinShareUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(profileUrl)}`;
@@ -1827,6 +1842,520 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
 }
 
 /* ─────────────────────────────────────────────────
+   PROGRESS GRAPH
+───────────────────────────────────────────────── */
+function ProgressGraph({ analyses, tk, isMobile, onNavigate }: { analyses: AnalysisRecord[]; tk: Theme; isMobile: boolean; onNavigate: (p: Page) => void }) {
+  const [activeTab, setActiveTab] = useState<"score" | "github" | "leetcode" | "codeforces">("score");
+
+  // Sort analyses oldest → newest for the chart
+  const sorted = [...analyses].reverse();
+  const labels = sorted.map(r => {
+    const d = new Date(r.date);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  });
+
+  const tabItems: { key: typeof activeTab; label: string; color: string; bg: string; border: string }[] = [
+    { key: "score", label: "Overall Score", color: tk.teal, bg: tk.greenLight, border: tk.greenBorder },
+    { key: "github", label: "GitHub", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder },
+    { key: "leetcode", label: "LeetCode", color: tk.amber, bg: tk.amberLight, border: tk.amberBorder },
+    { key: "codeforces", label: "Codeforces", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder },
+  ];
+
+  const gridColor = tk.border;
+  const textColor = tk.text3;
+
+  const baseOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index" as const, intersect: false },
+    plugins: {
+      legend: { display: true, position: "top" as const, labels: { color: tk.text2, font: { size: 11 }, boxWidth: 12, boxHeight: 3, padding: 12, usePointStyle: true, pointStyle: "rect" as const } },
+      tooltip: { backgroundColor: tk.surface, titleColor: tk.text, bodyColor: tk.text2, borderColor: tk.border, borderWidth: 1, cornerRadius: 8, padding: 10, titleFont: { size: 12, weight: "bold" as const }, bodyFont: { size: 11 }, displayColors: true, boxWidth: 8, boxHeight: 8 },
+    },
+    scales: {
+      x: { grid: { color: gridColor, drawBorder: false }, ticks: { color: textColor, font: { size: 10 }, maxRotation: 0 } },
+      y: { grid: { color: gridColor, drawBorder: false }, ticks: { color: textColor, font: { size: 10 } }, beginAtZero: true },
+    },
+    elements: { point: { radius: 4, hoverRadius: 6, borderWidth: 2 }, line: { tension: 0.35, borderWidth: 2.5 } },
+  };
+
+  const makeDataset = (label: string, data: (number | null)[], color: string, fill = false) => ({
+    label,
+    data,
+    borderColor: color,
+    backgroundColor: fill ? `${color}18` : color,
+    fill,
+    pointBackgroundColor: "#fff",
+    pointBorderColor: color,
+    spanGaps: true,
+  });
+
+  let chartData;
+  switch (activeTab) {
+    case "score":
+      chartData = {
+        labels,
+        datasets: [makeDataset("DevIQ Score", sorted.map(r => r.score || null), tk.teal, true)],
+      };
+      break;
+    case "github":
+      chartData = {
+        labels,
+        datasets: [
+          makeDataset("Stars", sorted.map(r => r.ghStars ?? null), tk.blue, true),
+          makeDataset("Repos", sorted.map(r => r.ghRepos ?? null), tk.teal),
+        ],
+      };
+      break;
+    case "leetcode":
+      chartData = {
+        labels,
+        datasets: [
+          makeDataset("Total Solved", sorted.map(r => r.lcSolved ?? null), tk.amber, true),
+          makeDataset("Easy", sorted.map(r => r.lcEasy ?? null), tk.green),
+          makeDataset("Medium", sorted.map(r => r.lcMedium ?? null), "#F59E0B"),
+          makeDataset("Hard", sorted.map(r => r.lcHard ?? null), tk.rose),
+        ],
+      };
+      break;
+    case "codeforces":
+      chartData = {
+        labels,
+        datasets: [makeDataset("Rating", sorted.map(r => r.cfRating ?? null), tk.purple, true)],
+      };
+      break;
+  }
+
+  return (
+    <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow, marginTop: 14 }}>
+      <div style={{ padding: "12px 18px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={tk.teal} strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>
+          <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3 }}>Progress Over Time</span>
+        </div>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {tabItems.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              style={{
+                padding: "4px 10px",
+                borderRadius: 6,
+                border: `1px solid ${activeTab === t.key ? t.border : tk.border}`,
+                background: activeTab === t.key ? t.bg : "transparent",
+                color: activeTab === t.key ? t.color : tk.text3,
+                fontSize: 11,
+                fontWeight: activeTab === t.key ? 600 : 500,
+                cursor: "pointer",
+                fontFamily: "inherit",
+                transition: "all 0.15s",
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {analyses.length < 2 ? (
+        <div style={{ padding: "40px 18px", textAlign: "center" as const }}>
+          <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
+            <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 6 }}>Not enough data yet</div>
+          <div style={{ fontSize: 12, color: tk.text3, lineHeight: 1.6, marginBottom: 16 }}>
+            Run at least 2 analyses to see your progress graph.<br />
+            You have {analyses.length} analysis so far.
+          </div>
+          <button onClick={() => onNavigate("analyze")} style={{ padding: "7px 18px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>
+            Run Analysis →
+          </button>
+        </div>
+      ) : (
+        <div style={{ padding: isMobile ? "12px 10px 16px" : "16px 18px 20px" }}>
+          <div style={{ height: isMobile ? 220 : 280, position: "relative" }}>
+            <Line data={chartData} options={baseOptions} />
+          </div>
+          {/* Summary row */}
+          {activeTab === "score" && sorted.length >= 2 && (() => {
+            const first = sorted[0].score;
+            const last = sorted[sorted.length - 1].score;
+            const diff = last - first;
+            const isUp = diff > 0;
+            return (
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 14, padding: "10px 14px", borderRadius: 8, background: tk.bgAlt, border: `1px solid ${tk.border}` }}>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>First</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{first.toFixed(1)}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Latest</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{last.toFixed(1)}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Change</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: isUp ? tk.green : diff < 0 ? tk.rose : tk.text3 }}>
+                    {isUp ? "↑" : diff < 0 ? "↓" : "→"} {Math.abs(diff).toFixed(1)}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          {activeTab === "leetcode" && sorted.length >= 2 && (() => {
+            const first = sorted[0].lcSolved ?? 0;
+            const last = sorted[sorted.length - 1].lcSolved ?? 0;
+            const diff = last - first;
+            return (
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 14, padding: "10px 14px", borderRadius: 8, background: tk.bgAlt, border: `1px solid ${tk.border}` }}>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>First</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{first}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Latest</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{last}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Problems Gained</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: diff > 0 ? tk.green : diff < 0 ? tk.rose : tk.text3 }}>
+                    {diff > 0 ? "+" : ""}{diff}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          {activeTab === "codeforces" && sorted.length >= 2 && (() => {
+            const first = sorted.find(r => r.cfRating != null)?.cfRating ?? 0;
+            const last = [...sorted].reverse().find(r => r.cfRating != null)?.cfRating ?? 0;
+            const diff = last - first;
+            const rank = [...sorted].reverse().find(r => r.cfRank)?.cfRank;
+            return (
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 14, padding: "10px 14px", borderRadius: 8, background: tk.bgAlt, border: `1px solid ${tk.border}` }}>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>First Rating</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{first}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Latest</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{last}{rank ? ` (${rank})` : ""}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Rating Change</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: diff > 0 ? tk.green : diff < 0 ? tk.rose : tk.text3 }}>
+                    {diff > 0 ? "↑" : diff < 0 ? "↓" : "→"} {Math.abs(diff)}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          {activeTab === "github" && sorted.length >= 2 && (() => {
+            const firstStars = sorted.find(r => r.ghStars != null)?.ghStars ?? 0;
+            const lastStars = [...sorted].reverse().find(r => r.ghStars != null)?.ghStars ?? 0;
+            const firstRepos = sorted.find(r => r.ghRepos != null)?.ghRepos ?? 0;
+            const lastRepos = [...sorted].reverse().find(r => r.ghRepos != null)?.ghRepos ?? 0;
+            return (
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 14, padding: "10px 14px", borderRadius: 8, background: tk.bgAlt, border: `1px solid ${tk.border}` }}>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Stars</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{firstStars} → {lastStars}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Repos</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: tk.text }}>{firstRepos} → {lastRepos}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 80 }}>
+                  <div style={{ fontSize: 10, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.04em", marginBottom: 3 }}>Growth</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: (lastStars - firstStars) >= 0 ? tk.green : tk.rose }}>
+                    +{lastStars - firstStars} stars / +{lastRepos - firstRepos} repos
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────
+   ROLE SUGGESTION (shown in analysis results)
+   Scans languages, repo names, descriptions, topics,
+   LC/CF stats to infer 12 developer roles.
+───────────────────────────────────────────────── */
+type DevRole = "Frontend Developer" | "Backend Developer" | "Full-Stack Developer" | "Mobile Developer" | "Application Developer" | "ML / Data Engineer" | "DevOps / Cloud Engineer" | "Game Developer" | "Security Engineer" | "Embedded / IoT Developer" | "Blockchain Developer" | "Competitive Programmer";
+interface RoleScore { role: DevRole; score: number; reasons: string[]; icon: string; color: string; }
+
+function inferRolesFromData(data: ResultData, tk: Theme): RoleScore[] {
+  const roles: RoleScore[] = [
+    { role: "Frontend Developer",      score: 0, reasons: [], icon: "FE", color: tk.blue },
+    { role: "Backend Developer",       score: 0, reasons: [], icon: "BE", color: tk.teal },
+    { role: "Full-Stack Developer",    score: 0, reasons: [], icon: "FS", color: tk.green },
+    { role: "Mobile Developer",        score: 0, reasons: [], icon: "MB", color: "#E040FB" },
+    { role: "Application Developer",   score: 0, reasons: [], icon: "AP", color: "#00ACC1" },
+    { role: "ML / Data Engineer",      score: 0, reasons: [], icon: "ML", color: tk.purple },
+    { role: "DevOps / Cloud Engineer", score: 0, reasons: [], icon: "DO", color: tk.amber },
+    { role: "Game Developer",          score: 0, reasons: [], icon: "GD", color: "#FF6D00" },
+    { role: "Security Engineer",       score: 0, reasons: [], icon: "SE", color: tk.rose },
+    { role: "Embedded / IoT Developer",score: 0, reasons: [], icon: "HW", color: "#78909C" },
+    { role: "Blockchain Developer",    score: 0, reasons: [], icon: "BC", color: "#FFB300" },
+    { role: "Competitive Programmer",  score: 0, reasons: [], icon: "CP", color: "#EF5350" },
+  ];
+  const r = (name: DevRole) => roles.find(x => x.role === name)!;
+
+  /* ═══ 1. LANGUAGE-DISTRIBUTION SIGNALS ═══ */
+  const langs = data.github?.analytics?.language_distribution || {};
+  const topLang = (data.github?.analytics?.most_used_language || "").toLowerCase();
+  const langTotal = Object.values(langs).reduce((a, b) => a + b, 0) || 1;
+  const langPct = (names: string[]) => names.reduce((s, n) => s + (Object.entries(langs).find(([k]) => k.toLowerCase() === n)?.[1] ?? 0), 0) / langTotal;
+  const hasLangs = Object.keys(langs).length > 0;
+
+  const feLangs   = ["javascript", "typescript", "html", "css", "scss", "vue", "svelte"];
+  const beLangs   = ["java", "go", "rust", "c#", "php", "ruby", "kotlin", "scala", "elixir"];
+  const mobileLangs = ["dart", "swift", "objective-c", "kotlin"];
+  const mlLangs   = ["jupyter notebook", "r", "julia"];
+  const devopsLangs = ["shell", "hcl", "dockerfile", "nix", "powershell", "makefile"];
+  const cpLangs   = ["c++", "c"];
+  const gameLangs = ["c#", "lua", "gdscript", "glsl", "hlsl"];
+  const embeddedLangs = ["c", "assembly", "vhdl", "verilog", "systemverilog"];
+  const blockchainLangs = ["solidity", "vyper", "move", "cairo"];
+
+  const fePct = langPct(feLangs); const bePct = langPct(beLangs);
+  const mobilePct = langPct(mobileLangs); const mlPct = langPct(mlLangs);
+  const doPct = langPct(devopsLangs); const cpPct = langPct(cpLangs);
+  const pyPct = langPct(["python"]); const gamePct = langPct(gameLangs);
+  const embPct = langPct(embeddedLangs); const bcPct = langPct(blockchainLangs);
+
+  // Frontend
+  if (fePct > 0.25) { r("Frontend Developer").score += 30; r("Frontend Developer").reasons.push(`${(fePct * 100).toFixed(0)}% frontend languages`); }
+  if (feLangs.includes(topLang)) { r("Frontend Developer").score += 15; r("Frontend Developer").reasons.push(`Top lang: ${data.github?.analytics?.most_used_language}`); }
+  // Backend
+  if (bePct > 0.2) { r("Backend Developer").score += 30; r("Backend Developer").reasons.push(`${(bePct * 100).toFixed(0)}% backend languages`); }
+  if (beLangs.includes(topLang)) { r("Backend Developer").score += 15; r("Backend Developer").reasons.push(`Top lang: ${data.github?.analytics?.most_used_language}`); }
+  if (pyPct > 0.15 && mlPct < 0.1) { r("Backend Developer").score += 10; r("Backend Developer").reasons.push("Python (server-side)"); }
+  // Mobile
+  if (mobilePct > 0.15) { r("Mobile Developer").score += 30; r("Mobile Developer").reasons.push(`${(mobilePct * 100).toFixed(0)}% mobile languages`); }
+  if (["dart", "swift", "objective-c"].includes(topLang)) { r("Mobile Developer").score += 20; r("Mobile Developer").reasons.push(`Top lang: ${data.github?.analytics?.most_used_language}`); }
+  // ML/Data
+  if (mlPct > 0.1) { r("ML / Data Engineer").score += 35; r("ML / Data Engineer").reasons.push(`${(mlPct * 100).toFixed(0)}% ML/data languages`); }
+  if (pyPct > 0.3 && mlPct > 0.05) { r("ML / Data Engineer").score += 20; r("ML / Data Engineer").reasons.push("Heavy Python + notebooks"); }
+  if (topLang === "python" && mlPct > 0) { r("ML / Data Engineer").score += 10; }
+  // DevOps/Cloud
+  if (doPct > 0.1) { r("DevOps / Cloud Engineer").score += 30; r("DevOps / Cloud Engineer").reasons.push(`${(doPct * 100).toFixed(0)}% infra/scripting languages`); }
+  if (devopsLangs.includes(topLang)) { r("DevOps / Cloud Engineer").score += 15; r("DevOps / Cloud Engineer").reasons.push(`Top lang: ${data.github?.analytics?.most_used_language}`); }
+  // Game
+  if (gamePct > 0.15) { r("Game Developer").score += 20; r("Game Developer").reasons.push(`${(gamePct * 100).toFixed(0)}% game-related languages`); }
+  // Embedded
+  if (embPct > 0.15) { r("Embedded / IoT Developer").score += 25; r("Embedded / IoT Developer").reasons.push(`${(embPct * 100).toFixed(0)}% embedded languages`); }
+  // Blockchain
+  if (bcPct > 0.05) { r("Blockchain Developer").score += 35; r("Blockchain Developer").reasons.push(`${(bcPct * 100).toFixed(0)}% blockchain languages`); }
+  // CP
+  if (cpLangs.includes(topLang)) { r("Competitive Programmer").score += 15; r("Competitive Programmer").reasons.push(`Top lang: ${data.github?.analytics?.most_used_language}`); }
+  if (cpPct > 0.3) { r("Competitive Programmer").score += 10; }
+  // Full-Stack (cross-signal)
+  if (fePct > 0.15 && (bePct > 0.1 || pyPct > 0.1)) { r("Full-Stack Developer").score += 25; r("Full-Stack Developer").reasons.push("Mix of frontend + backend languages"); }
+
+  /* ═══ 2. REPO SCANNING — names, descriptions, topics ═══ */
+  const repos = data.github?.repositories || [];
+  const repoTexts = repos.map(rp => {
+    const parts = [rp.name || "", rp.description || "", ...(rp.topics || [])];
+    return parts.join(" ").toLowerCase();
+  });
+  const allText = repoTexts.join(" ");
+
+  const kwCount = (keywords: string[]) => {
+    let hits = 0; const matched: string[] = [];
+    for (const txt of repoTexts) {
+      for (const kw of keywords) {
+        if (txt.includes(kw)) { hits++; matched.push(kw); break; }
+      }
+    }
+    return { hits, matched: [...new Set(matched)] };
+  };
+
+  // Frontend repo keywords
+  const feKw = kwCount(["react", "nextjs", "next-js", "next.js", "vue", "angular", "svelte", "tailwind", "frontend", "front-end", "landing-page", "portfolio", "website", "ui-", "css", "sass", "bootstrap", "material-ui", "chakra", "storybook", "webpack", "vite"]);
+  if (feKw.hits >= 2) { r("Frontend Developer").score += 15 + feKw.hits * 3; r("Frontend Developer").reasons.push(`${feKw.hits} frontend repos`); }
+
+  // Backend repo keywords
+  const beKw = kwCount(["api", "server", "backend", "back-end", "rest", "graphql", "grpc", "microservice", "fastapi", "express", "spring", "django", "flask", "rails", "nest", "middleware", "auth", "oauth", "database", "sql", "postgres", "mongo", "redis", "kafka", "rabbitmq", "queue"]);
+  if (beKw.hits >= 2) { r("Backend Developer").score += 15 + beKw.hits * 3; r("Backend Developer").reasons.push(`${beKw.hits} backend/API repos`); }
+
+  // Mobile repo keywords
+  const mbKw = kwCount(["android", "ios", "flutter", "react-native", "react native", "mobile", "expo", "capacitor", "cordova", "swiftui", "uikit", "jetpack", "kotlin-android", "xamarin", "maui", "ionic"]);
+  if (mbKw.hits >= 1) { r("Mobile Developer").score += 20 + mbKw.hits * 5; r("Mobile Developer").reasons.push(`${mbKw.hits} mobile repos`); }
+
+  // Application Developer repo keywords (desktop apps, CLIs, tools, utilities)
+  const apKw = kwCount(["app", "application", "desktop", "electron", "tauri", "cli", "tool", "utility", "gui", "tkinter", "qt", "wxwidgets", "javafx", "swing", "wpf", "winforms", "calculator", "todo", "chat", "manager", "tracker", "system", "automation", "bot", "scraper", "generator", "converter", "dashboard", "monitor", "plugin", "extension"]);
+  if (apKw.hits >= 2) { r("Application Developer").score += 15 + apKw.hits * 3; r("Application Developer").reasons.push(`${apKw.hits} app/tool repos`); }
+  // Also boost from repo count — diverse builders are app devs
+  if (repos.length >= 10) { r("Application Developer").score += 10; r("Application Developer").reasons.push(`${repos.length} total repos`); }
+  if (repos.length >= 20) { r("Application Developer").score += 10; }
+
+  // ML/Data repo keywords
+  const mlKw = kwCount(["machine-learning", "deep-learning", "neural", "tensorflow", "pytorch", "keras", "scikit", "sklearn", "nlp", "computer-vision", "cv", "data-science", "data-analysis", "pandas", "numpy", "model", "prediction", "classification", "regression", "transformer", "bert", "gpt", "llm", "ai", "ml-", "dataset", "kaggle", "notebook", "jupyter"]);
+  if (mlKw.hits >= 2) { r("ML / Data Engineer").score += 15 + mlKw.hits * 4; r("ML / Data Engineer").reasons.push(`${mlKw.hits} ML/data repos`); }
+
+  // DevOps/Cloud repo keywords
+  const doKw = kwCount(["docker", "kubernetes", "k8s", "terraform", "ansible", "jenkins", "ci-cd", "cicd", "pipeline", "github-actions", "devops", "infra", "deploy", "helm", "aws", "azure", "gcp", "cloud", "serverless", "lambda", "nginx", "prometheus", "grafana", "monitoring", "config", "dotfiles"]);
+  if (doKw.hits >= 2) { r("DevOps / Cloud Engineer").score += 15 + doKw.hits * 4; r("DevOps / Cloud Engineer").reasons.push(`${doKw.hits} DevOps/cloud repos`); }
+
+  // Game Developer repo keywords
+  const gdKw = kwCount(["game", "unity", "unreal", "godot", "pygame", "phaser", "three.js", "threejs", "opengl", "vulkan", "sdl", "sfml", "rpg", "platformer", "shooter", "puzzle", "gamedev", "engine", "2d", "3d", "sprite", "tilemap"]);
+  if (gdKw.hits >= 1) { r("Game Developer").score += 20 + gdKw.hits * 5; r("Game Developer").reasons.push(`${gdKw.hits} game repos`); }
+
+  // Security repo keywords
+  const seKw = kwCount(["security", "pentest", "ctf", "vulnerability", "exploit", "malware", "crypto", "cipher", "forensic", "firewall", "infosec", "hack", "owasp", "scanner", "brute", "reverse-engineer", "decompil", "password", "encrypt", "decrypt"]);
+  if (seKw.hits >= 1) { r("Security Engineer").score += 20 + seKw.hits * 5; r("Security Engineer").reasons.push(`${seKw.hits} security repos`); }
+
+  // Embedded/IoT repo keywords
+  const hwKw = kwCount(["arduino", "esp32", "esp8266", "raspberry-pi", "raspi", "embedded", "iot", "firmware", "microcontroller", "rtos", "stm32", "fpga", "vhdl", "verilog", "sensor", "robot", "hardware", "driver", "serial", "gpio", "pic", "avr"]);
+  if (hwKw.hits >= 1) { r("Embedded / IoT Developer").score += 20 + hwKw.hits * 5; r("Embedded / IoT Developer").reasons.push(`${hwKw.hits} embedded/IoT repos`); }
+
+  // Blockchain repo keywords
+  const bcKw = kwCount(["blockchain", "web3", "solidity", "smart-contract", "ethereum", "defi", "nft", "dapp", "token", "hardhat", "truffle", "foundry", "solana", "anchor", "polygon", "metamask", "wallet", "erc20", "erc721"]);
+  if (bcKw.hits >= 1) { r("Blockchain Developer").score += 20 + bcKw.hits * 5; r("Blockchain Developer").reasons.push(`${bcKw.hits} blockchain/web3 repos`); }
+
+  // Full-Stack repo keywords
+  const fsKw = kwCount(["fullstack", "full-stack", "mern", "mean", "pern", "t3", "monorepo", "saas", "ecommerce", "e-commerce", "marketplace", "social-media", "clone"]);
+  if (fsKw.hits >= 1) { r("Full-Stack Developer").score += 15 + fsKw.hits * 4; r("Full-Stack Developer").reasons.push(`${fsKw.hits} full-stack repos`); }
+
+  // Per-repo language scan for mobile/game/embedded that generic distribution may miss
+  let swiftRepos = 0, dartRepos = 0, csharpGameRepos = 0;
+  for (const rp of repos) {
+    const lang = (rp.language || "").toLowerCase();
+    const txt = [rp.name || "", rp.description || "", ...(rp.topics || [])].join(" ").toLowerCase();
+    if (lang === "swift" || lang === "objective-c") swiftRepos++;
+    if (lang === "dart") dartRepos++;
+    if (lang === "c#" && (txt.includes("unity") || txt.includes("game"))) csharpGameRepos++;
+  }
+  if (swiftRepos >= 2) { r("Mobile Developer").score += 15; r("Mobile Developer").reasons.push(`${swiftRepos} Swift/ObjC repos`); }
+  if (dartRepos >= 1) { r("Mobile Developer").score += 15; r("Mobile Developer").reasons.push(`${dartRepos} Dart/Flutter repos`); }
+  if (csharpGameRepos >= 1) { r("Game Developer").score += 20; r("Game Developer").reasons.push(`${csharpGameRepos} Unity C# repos`); }
+
+  /* ═══ 3. GITHUB STATS SIGNALS ═══ */
+  const ghRepos = data.github?.analytics?.total_projects ?? 0;
+  const ghStars = data.github?.analytics?.total_stars ?? 0;
+  if (ghRepos >= 20) { r("Full-Stack Developer").score += 10; r("Full-Stack Developer").reasons.push(`${ghRepos} repos (broad portfolio)`); }
+  if (ghRepos >= 10) { r("Backend Developer").score += 5; r("Application Developer").score += 5; }
+  if (ghStars >= 10) { r("Full-Stack Developer").score += 5; }
+
+  /* ═══ 4. LEETCODE SIGNALS ═══ */
+  const lcTotal = data.leetcode?.total_solved ?? 0;
+  const lcHard = data.leetcode?.hard_solved ?? 0;
+  const lcMed = data.leetcode?.medium_solved ?? 0;
+  if (lcTotal > 0) {
+    if (lcTotal >= 200) { r("Competitive Programmer").score += 25; r("Competitive Programmer").reasons.push(`${lcTotal} LC problems solved`); }
+    else if (lcTotal >= 100) { r("Competitive Programmer").score += 15; r("Competitive Programmer").reasons.push(`${lcTotal} LC problems`); }
+    else if (lcTotal >= 30) { r("Competitive Programmer").score += 5; }
+    if (lcHard >= 30) { r("Competitive Programmer").score += 15; r("Competitive Programmer").reasons.push(`${lcHard} hard problems`); }
+    if (lcMed >= 50) { r("Competitive Programmer").score += 5; }
+    if (lcTotal >= 50) { r("Backend Developer").score += 5; r("Backend Developer").reasons.push("Strong DSA foundation"); }
+  }
+
+  /* ═══ 5. CODEFORCES SIGNALS ═══ */
+  const cfRating = data.codeforces?.rating ?? 0;
+  if (cfRating > 0) {
+    r("Competitive Programmer").score += 20; r("Competitive Programmer").reasons.push(`CF rating: ${cfRating}`);
+    if (cfRating >= 1600) { r("Competitive Programmer").score += 15; r("Competitive Programmer").reasons.push("Expert+ rating"); }
+    else if (cfRating >= 1200) { r("Competitive Programmer").score += 8; }
+    if ((data.codeforces?.contests_participated ?? 0) >= 20) { r("Competitive Programmer").score += 10; r("Competitive Programmer").reasons.push(`${data.codeforces!.contests_participated} contests`); }
+  }
+
+  /* ═══ 6. FALLBACK — no lang distribution ═══ */
+  if (!hasLangs && topLang) {
+    if (feLangs.includes(topLang)) { r("Frontend Developer").score += 20; r("Frontend Developer").reasons.push(`Primary: ${data.github?.analytics?.most_used_language}`); }
+    else if (beLangs.includes(topLang) || topLang === "python") { r("Backend Developer").score += 20; r("Backend Developer").reasons.push(`Primary: ${data.github?.analytics?.most_used_language}`); }
+    else if (cpLangs.includes(topLang)) { r("Competitive Programmer").score += 10; }
+    else if (["dart", "swift"].includes(topLang)) { r("Mobile Developer").score += 20; r("Mobile Developer").reasons.push(`Primary: ${data.github?.analytics?.most_used_language}`); }
+  }
+
+  /* ═══ 7. CROSS-ROLE BONUSES ═══ */
+  // Full-Stack bonus when both FE + BE are strong
+  const feS = r("Frontend Developer").score;
+  const beS = r("Backend Developer").score;
+  if (feS >= 15 && beS >= 15) { r("Full-Stack Developer").score += Math.min(feS, beS) * 0.5; r("Full-Stack Developer").reasons.push("Balanced FE + BE skills"); }
+  // Application Developer gets a small boost from broad language diversity
+  const uniqueLangs = Object.keys(langs).length;
+  if (uniqueLangs >= 5) { r("Application Developer").score += 8; r("Application Developer").reasons.push(`${uniqueLangs} languages used`); }
+
+  roles.forEach(ro => { ro.reasons = [...new Set(ro.reasons)]; });
+  return roles.filter(ro => ro.score > 0).sort((a, b) => b.score - a.score);
+}
+
+function RoleSuggestion({ data, tk, isMobile }: { data: ResultData; tk: Theme; isMobile: boolean }) {
+  const roles = inferRolesFromData(data, tk);
+
+  if (roles.length === 0) {
+    return (
+      <div id="sec-role" style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow, marginBottom: 8 }}>
+        <SectionHeader label="Role Fit" tk={tk} />
+        <div style={{ padding: "32px 18px", textAlign: "center" as const }}>
+          <div style={{ fontSize: 13, color: tk.text3, lineHeight: 1.6 }}>Not enough data to determine a role. Try connecting more platforms.</div>
+        </div>
+      </div>
+    );
+  }
+
+  const top = roles[0];
+  const maxScore = top.score;
+
+  return (
+    <div id="sec-role" style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow, marginBottom: 8 }}>
+      <SectionHeader label="Which Role Fits You Best?" tk={tk} />
+
+      {/* Top role hero */}
+      <div style={{ padding: isMobile ? "20px 16px" : "24px 20px", background: `linear-gradient(135deg, ${top.color}10 0%, transparent 60%)`, borderBottom: `1px solid ${tk.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 14 }}>
+          <div style={{ width: 52, height: 52, borderRadius: 12, background: `${top.color}15`, border: `2px solid ${top.color}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, color: top.color, letterSpacing: "-0.03em", flexShrink: 0 }}>{top.icon}</div>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 4 }}>Best Match</div>
+            <div style={{ fontSize: isMobile ? 20 : 24, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em", lineHeight: 1.1 }}>{top.role}</div>
+          </div>
+        </div>
+        {top.reasons.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {top.reasons.slice(0, 4).map((reason, i) => (
+              <span key={i} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, background: `${top.color}12`, border: `1px solid ${top.color}30`, color: top.color, fontWeight: 500 }}>{reason}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* All roles bar chart — show ALL detected roles, not just top 5 */}
+      <div style={{ padding: isMobile ? "14px 16px 18px" : "16px 20px 20px" }}>
+        <div style={{ fontSize: 11, fontWeight: 500, color: tk.text3, marginBottom: 12, letterSpacing: "0.03em" }}>All Matching Roles ({roles.length})</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {roles.map((ro, i) => {
+            const pct = Math.max(6, Math.round((ro.score / maxScore) * 100));
+            return (
+              <div key={ro.role}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: ro.color, letterSpacing: "-0.03em", width: 22, textAlign: "center" as const, display: "inline-block" }}>{ro.icon}</span>
+                    <span style={{ fontSize: 12, fontWeight: i === 0 ? 700 : 500, color: i === 0 ? tk.text : tk.text2 }}>{ro.role}</span>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: i === 0 ? ro.color : tk.text3, fontVariantNumeric: "tabular-nums" }}>{pct}%</span>
+                </div>
+                <div style={{ height: 8, borderRadius: 4, background: tk.bgAlt, overflow: "hidden" }}>
+                  <div style={{ height: "100%", borderRadius: 4, width: `${pct}%`, background: i === 0 ? ro.color : `${ro.color}80`, transition: "width 0.6s ease" }} />
+                </div>
+                {i === 0 && ro.reasons.length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
+                    {ro.reasons.slice(0, 4).map((reason, j) => (
+                      <span key={j} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: tk.bgAlt, border: `1px solid ${tk.border}`, color: tk.text3 }}>{reason}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────
    PROFILE PAGE
 ───────────────────────────────────────────────── */
 function ProfilePage({ 
@@ -2152,6 +2681,8 @@ function ProfilePage({
           </div>
         </div>
       </div>
+      {/* Progress Over Time Graph */}
+      <ProgressGraph analyses={p?.recentAnalyses || []} tk={tk} isMobile={isMobile} onNavigate={onNavigate} />
     </div>
   );
 }
@@ -2470,6 +3001,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
   const [selectedCompany, setSelectedCompany] = useState<string>("");
   const [companyData, setCompanyData] = useState<CompanyData | null>(null);
   const [companyLoading, setCompanyLoading] = useState(false);
+  const [companyError, setCompanyError] = useState<string | null>(null);
   const [companyFilter, setCompanyFilter] = useState<"all" | "Easy" | "Medium" | "Hard">("all");
   const [companySearch, setCompanySearch] = useState("");
   const [companyTracking, setCompanyTracking] = useState<{ [slug: string]: string[] }>(p?.companyTracking || {});
@@ -2660,30 +3192,34 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
     if (!slug) return;
     setCompanyLoading(true);
     setCompanyData(null);
+    setCompanyError(null);
     try {
-      console.log("Fetching:", slug);
       const res = await fetch(`${API}/leetcode/company-problems/${slug}`);
-      const data: CompanyData = await res.json();
-      if (data && Array.isArray(data.problems)) {
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        const detail = errBody?.error || errBody?.detail || `Server returned ${res.status}`;
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      if (data && Array.isArray(data.problems) && data.problems.length > 0) {
         setCompanyData(data);
-        // Auto-scroll to problems panel
         setTimeout(() => {
           document.getElementById("company-problems-panel")?.scrollIntoView({ 
             behavior: "smooth", block: "start" 
           });
         }, 100);
+      } else if (data?.error) {
+        throw new Error(data.error);
       } else {
-        throw new Error("Invalid response shape");
+        throw new Error(`No problems available for this company yet.`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("Company fetch error:", e);
-      setCompanyData({
-        company: slug,
-        slug,
-        total_problems: 0,
-        problems: [],
-        last_updated: new Date().toISOString(),
-      });
+      const message = e instanceof TypeError && e.message === "Failed to fetch"
+        ? "Could not reach the server. Please check your internet connection."
+        : e?.message || "Failed to load problems. Please try again.";
+      setCompanyError(message);
+      setCompanyData(null);
     } finally {
       setCompanyLoading(false);
     }
@@ -2790,7 +3326,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
             <button
               onClick={() => {
                 markProblemSolved(recommendedProblem);
-                alert("Problem marked as solved! 🎉");
+                alert("Problem marked as solved!");
               }}
               style={{
                 padding: "10px 20px",
@@ -2850,7 +3386,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
       {/* Solved Problems History */}
       {solvedProblems.length > 0 && (
         <div>
-          <div style={{ fontSize: 11, fontWeight: 600, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>✅ Recently Solved</div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Recently Solved</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {solvedProblems.slice(-5).reverse().map((problem) => (
               <div key={problem.id} style={{ padding: 12, background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -2920,6 +3456,21 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
           </div>
         )}
 
+        {/* Error state */}
+        {companyError && !companyLoading && (
+          <div style={{ padding: 32, border: `1px solid ${tk.roseBorder}`, borderRadius: 12, background: tk.roseLight, textAlign: "center" }}>
+            <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.roseLight, border: `1px solid ${tk.roseBorder}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.rose} strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg></div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: tk.rose, marginBottom: 6 }}>Failed to Load Problems</div>
+            <div style={{ fontSize: 13, color: tk.text2, marginBottom: 16, lineHeight: 1.5, maxWidth: 400, margin: "0 auto 16px" }}>{companyError}</div>
+            <button onClick={() => fetchCompanyProblems(selectedCompany)} style={{
+              padding: "8px 20px", borderRadius: 8, border: `1px solid ${tk.roseBorder}`,
+              background: tk.surface, color: tk.rose, cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "all 0.15s"
+            }}>
+              ↻ Retry
+            </button>
+          </div>
+        )}
+
         {companyData && !companyLoading && (
           <div id="company-problems-panel" style={{ border: `1px solid ${tk.border}`, borderRadius: 12, overflow: "hidden" }}>
             {/* Company header */}
@@ -2983,8 +3534,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
             </div>
             {companyData.total_problems === 0 && companyData.problems.length === 0 && (
               <div style={{ padding: 32, textAlign: "center", color: tk.text3, fontSize: 14 }}>
-                Could not load problems for this company.<br />
-                Please try another company or check your backend connection.
+                No problems loaded for this company yet.
               </div>
             )}
 
@@ -3253,7 +3803,7 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
             </div>
             {following.length === 0 ? (
               <div style={{ padding: "48px 20px", textAlign: "center" }}>
-                <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", fontSize: 20, color: tk.text3 }}>👥</div>
+                <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 1-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg></div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: tk.text, marginBottom: 8 }}>No one followed yet</div>
                 <div style={{ fontSize: 13, color: tk.text2, marginBottom: 16 }}>Search for developers above to start following them.</div>
               </div>
@@ -3298,7 +3848,7 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
             </div>
             {followers.length === 0 ? (
               <div style={{ padding: "48px 20px", textAlign: "center" }}>
-                <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", fontSize: 20, color: tk.text3 }}>👤</div>
+                <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg></div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: tk.text, marginBottom: 8 }}>No followers yet</div>
                 <div style={{ fontSize: 13, color: tk.text2, lineHeight: 1.6 }}>When other developers follow you, they will appear here.<br/>Share your profile to grow your network!</div>
               </div>
@@ -3352,7 +3902,7 @@ function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave 
           </div>
           {notifications.length === 0 ? (
             <div style={{ padding: "48px 20px", textAlign: "center" }}>
-              <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", fontSize: 20, color: tk.text3 }}>🔔</div>
+              <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg></div>
               <div style={{ fontSize: 16, fontWeight: 600, color: tk.text, marginBottom: 8 }}>No notifications yet</div>
               <div style={{ fontSize: 13, color: tk.text2 }}>Follow some developers to get notified about score changes.</div>
             </div>
@@ -3402,7 +3952,7 @@ function SettingsPage({
   connectingPlatform,
   accountSaveMessage: externalAccountSaveMessage,
   githubUsername: externalGithubUsername,
-  leetcodeUsername: externalLeetcodeUsername,
+  leetcodeUsername: externalLeetcodeUsername, 
   codeforcesUsername: externalCodeforcesUsername,
   onGithubUsernameChange,
   onLeetcodeUsernameChange,
@@ -3605,7 +4155,7 @@ function SettingsPage({
               </div>
               {!user.provider && (
                 <div style={{ background: tk.roseLight, border: `1px solid ${tk.roseBorder}`, borderRadius: 9, padding: "12px 14px", marginBottom: 12 }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: tk.rose, marginBottom: 6 }}>⚠️ Not Authenticated</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: tk.rose, marginBottom: 6 }}>Not Authenticated</div>
                   <div style={{ fontSize: 11, color: tk.rose, lineHeight: 1.5 }}>
                     You need to <strong>log in with Google</strong> to sync your profile across devices. Click "Sign Out" and then log in with Gmail.
                   </div>
@@ -3620,7 +4170,7 @@ function SettingsPage({
                   Keep your profile synced across all devices. Changes you make here will appear on other devices logged in with <strong>{user.email}</strong>
                 </div>
                 <div style={{ fontSize: 10, color: tk.blue, opacity: 0.8, marginBottom: 10, fontStyle: "italic" }}>
-                  💡 Tip: "Save Changes" button automatically syncs. Use manual buttons below for immediate control.
+                  Tip: "Save Changes" button automatically syncs. Use manual buttons below for immediate control.
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
                   <button onClick={handleManualSync} disabled={syncing || !user.provider} style={{ padding: "7px 14px", borderRadius: 7, border: "none", background: user.provider ? tk.blue : tk.border, color: user.provider ? "#fff" : tk.text3, cursor: (syncing || !user.provider) ? "not-allowed" : "pointer", fontSize: 11, fontWeight: 600, fontFamily: "inherit", opacity: (syncing || !user.provider) ? 0.5 : 1 }} title={!user.provider ? "Please log in with Google first" : ""}>
@@ -3865,8 +4415,8 @@ export default function Page() {
         }
       }, 1000);
       
-      const pathPage = window.location.pathname.replace("/", "") as Page;
-      const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following"];
+      const pathPage = window.location.pathname.replace(/^\/|\/$/, "") as Page;
+      const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following", "chat", "practice"];
       const initialPage = validPages.includes(pathPage) ? pathPage : "home";
       setPage(initialPage);
       window.history.replaceState({ page: initialPage }, "", initialPage === "home" ? "/" : `/${initialPage}`);
@@ -4388,8 +4938,8 @@ export default function Page() {
     result.combined_score = Math.round(sc * 10) / 10; setErrors(errs); setData(result as ResultData); setLoading(false);
     if (user) {
       const p = loadProfile(user.email); p.analysesRun = (p.analysesRun || 0) + 1;
-      const record: AnalysisRecord = { id: Date.now().toString(), date: new Date().toISOString(), github: gh.trim() || undefined, leetcode: lc.trim() || undefined, codeforces: cf.trim() || undefined, score: result.combined_score ?? 0, ghStars: result.github?.analytics?.total_stars, ghRepos: result.github?.analytics?.total_projects, ghLang: result.github?.analytics?.most_used_language, lcSolved: result.leetcode?.total_solved, lcEasy: result.leetcode?.easy_solved, lcMedium: result.leetcode?.medium_solved, lcHard: result.leetcode?.hard_solved, cfRating: result.codeforces?.rating, cfRank: result.codeforces?.rank };
-      const prev = p.recentAnalyses || []; p.recentAnalyses = [record, ...prev].slice(0, 10);
+      const record: AnalysisRecord = { id: Date.now().toString(), date: new Date().toISOString(), github: gh.trim() || undefined, leetcode: lc.trim() || undefined, codeforces: cf.trim() || undefined, score: result.combined_score ?? 0, ghStars: result.github?.analytics?.total_stars, ghRepos: result.github?.analytics?.total_projects, ghLang: result.github?.analytics?.most_used_language, ghLangs: result.github?.analytics?.language_distribution, lcSolved: result.leetcode?.total_solved, lcEasy: result.leetcode?.easy_solved, lcMedium: result.leetcode?.medium_solved, lcHard: result.leetcode?.hard_solved, cfRating: result.codeforces?.rating, cfRank: result.codeforces?.rank, cfProblemsSolved: result.codeforces?.problems_solved, cfContests: result.codeforces?.contests_participated };
+      const prev = p.recentAnalyses || []; p.recentAnalyses = [record, ...prev].slice(0, 20);
 
       // Check for followed users and create notifications for score changes
       const following = p.following || [];
@@ -4444,7 +4994,7 @@ export default function Page() {
 
   const sColor = (s: StepItem["status"]) => s === "active" ? tk.blue : s === "done" ? tk.green : s === "error" ? tk.rose : tk.text3;
   const px = isMobile ? "16px" : "32px";
-  const navLinks = data && page === "analyze" ? [{ label: "Score", id: "sec-score" }, { label: "Platforms", id: "sec-platforms" }, { label: "AI", id: "sec-ai" }, { label: "Activity", id: "sec-heatmap" }, { label: "Repos", id: "sec-repos" }] : [];
+  const navLinks = data && page === "analyze" ? [{ label: "Score", id: "sec-score" }, { label: "Platforms", id: "sec-platforms" }, { label: "AI", id: "sec-ai" }, { label: "Activity", id: "sec-heatmap" }, { label: "Role", id: "sec-role" }, { label: "Repos", id: "sec-repos" }] : [];
   const scroll = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); setMenuOpen(false); };
   const tagS = (c: string, bg: string, b: string): CSSProperties => ({ fontSize: 11, fontWeight: 500, letterSpacing: "0.03em", padding: "3px 9px", borderRadius: 5, border: `1px solid ${b}`, color: c, background: bg, whiteSpace: "nowrap" as const });
 
@@ -4464,7 +5014,7 @@ export default function Page() {
         html{scroll-behavior:smooth;font-size:17px;}
         body{margin:0;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:15px;}
         input,button,textarea{font-family:'Geist',system-ui,sans-serif;font-size:inherit;}
-        #sec-score,#sec-platforms,#sec-ai,#sec-heatmap,#sec-repos{scroll-margin-top:60px;}
+        #sec-score,#sec-platforms,#sec-ai,#sec-heatmap,#sec-role,#sec-repos{scroll-margin-top:60px;}
         @keyframes spin{to{transform:rotate(360deg);}}
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
         @keyframes shimmer{0%,100%{opacity:1}50%{opacity:0.5}}
@@ -4624,44 +5174,109 @@ export default function Page() {
         )}
 
         {/* PAGES */}
-        <div style={{ maxWidth: 1100, margin: "0 auto", padding: `0 ${px} 80px` }}>
+        <main role="main" style={{ maxWidth: 1100, margin: "0 auto", padding: `0 ${px} 80px` }}>
+          <noscript><div style={{padding:40,textAlign:"center",maxWidth:700,margin:"0 auto"}}><h1>DevIQ - Developer Analytics Platform</h1><p>DevIQ analyzes your GitHub, LeetCode, and Codeforces profiles to generate a unified developer score. Enable JavaScript to use the interactive analytics dashboard.</p><p>Features: GitHub repo analytics, LeetCode stats, Codeforces ratings, AI insights, developer role-fit analysis, head-to-head comparison, contribution heatmaps, and practice recommendations.</p></div></noscript>
 
           {/* HOME */}
           {page === "home" && (
-            <div className="fu">
-              <div style={{ padding: isMobile ? "64px 0 48px" : "112px 0 80px", borderBottom: `1px solid ${tk.border}`, marginBottom: 48 }}>
-                <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: tk.text3, marginBottom: 20 }}>Developer Analytics Platform</div>
-                <h1 style={{ fontSize: isMobile ? "clamp(36px,11vw,54px)" : "clamp(50px,7vw,72px)", fontWeight: 600, letterSpacing: "-0.05em", color: tk.text, lineHeight: 1.04, marginBottom: 24, maxWidth: 640 }}>Your developer profile,<br />fully measured.</h1>
-                <p style={{ fontSize: 16, color: tk.text2, lineHeight: 1.7, maxWidth: 500, fontWeight: 400, marginBottom: 36 }}>DevIQ unifies your GitHub, LeetCode, and Codeforces stats into a single score — with AI insights, contribution tracking, and head-to-head comparisons.</p>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button onClick={() => navigate("analyze")} style={{ padding: "11px 24px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, background: tk.accent, color: tk.accentFg, letterSpacing: "-0.01em" }}>Analyze Profile</button>
-                  <button onClick={() => navigate("compare")} style={{ padding: "11px 24px", borderRadius: 8, border: `1px solid ${tk.border}`, cursor: "pointer", fontSize: 13, fontWeight: 500, background: tk.surface, color: tk.text2, letterSpacing: "-0.01em" }}>Compare Developers</button>
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(3,1fr)", gap: 10, marginBottom: 48 }}>
-                {[
-                  { icon: <GitHubIcon size={18} color={tk.blue} />, title: "GitHub Analytics", desc: "Repos, stars, language breakdown, skill score, and contribution heatmap.", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder },
-                  { icon: <LeetCodeIcon size={18} color={tk.amber} />, title: "LeetCode Stats", desc: "Problems solved across Easy, Medium, and Hard. Contest ratings, global rank.", color: tk.amber, bg: tk.amberLight, border: tk.amberBorder },
-                  { icon: <CodeforcesIcon size={18} color={tk.purple} />, title: "Codeforces Rating", desc: "Current and peak ratings, rank titles, problems solved, contest history.", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder },
-                  { icon: <span style={{ fontSize: 18 }}>◎</span>, title: "Unified Score", desc: "A single weighted developer score combining activity, problem solving, and CP.", color: tk.green, bg: tk.greenLight, border: tk.greenBorder },
-                  { icon: <span style={{ fontSize: 18 }}>⊞</span>, title: "AI Insights", desc: "Get a sharp AI-generated roast or a personalized 7-day improvement plan.", color: tk.rose, bg: tk.roseLight, border: tk.roseBorder },
-                  { icon: <span style={{ fontSize: 18 }}>⇄</span>, title: "Compare Mode", desc: "Head-to-head comparison between two developers across every metric.", color: tk.teal, bg: tk.greenLight, border: tk.greenBorder },
-                ].map((f, i) => (
-                  <div key={i} style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, padding: "20px 22px", boxShadow: tk.shadow }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 8, background: f.bg, border: `1px solid ${f.border}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14, color: f.color }}>{f.icon}</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 7, letterSpacing: "-0.01em" }}>{f.title}</div>
-                    <div style={{ fontSize: 12, color: tk.text2, lineHeight: 1.6 }}>{f.desc}</div>
+            <article className="fu" itemScope itemType="https://schema.org/WebApplication">
+              <meta itemProp="name" content="DevIQ" />
+              <meta itemProp="url" content="https://deviq.online" />
+              <meta itemProp="applicationCategory" content="DeveloperApplication" />
+              <section style={{ padding: isMobile ? "64px 0 48px" : "112px 0 80px", borderBottom: `1px solid ${tk.border}`, marginBottom: 48 }}>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile || isTablet ? "1fr" : "minmax(0,1fr) 420px", gap: isMobile ? 22 : 30, alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: tk.text3, marginBottom: 20 }}>Developer Analytics Platform</div>
+                    <h1 style={{ fontSize: isMobile ? "clamp(36px,11vw,54px)" : "clamp(50px,7vw,72px)", fontWeight: 600, letterSpacing: "-0.05em", color: tk.text, lineHeight: 1.04, marginBottom: 24, maxWidth: 640 }}>Your developer profile,<br />fully measured.</h1>
+                    <p itemProp="description" style={{ fontSize: 16, color: tk.text2, lineHeight: 1.7, maxWidth: 500, fontWeight: 400, marginBottom: 36 }}>DevIQ unifies your GitHub, LeetCode, and Codeforces stats into a single score — with AI insights, contribution tracking, and head-to-head comparisons.</p>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button onClick={() => navigate("analyze")} style={{ padding: "11px 24px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, background: tk.accent, color: tk.accentFg, letterSpacing: "-0.01em" }}>Analyze Profile</button>
+                      <button onClick={() => navigate("compare")} style={{ padding: "11px 24px", borderRadius: 8, border: `1px solid ${tk.border}`, cursor: "pointer", fontSize: 13, fontWeight: 500, background: tk.surface, color: tk.text2, letterSpacing: "-0.01em" }}>Compare Developers</button>
+                    </div>
                   </div>
-                ))}
-              </div>
-              <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, padding: isMobile ? "28px 22px" : "36px 44px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 20, boxShadow: tk.shadow }}>
+
+                  {!isMobile && (
+                    <div aria-hidden style={{ background: tk.surface, borderRadius: 14, border: `1px solid ${tk.border}`, boxShadow: tk.shadowLg, padding: 18, position: "relative", overflow: "hidden" }}>
+                      <div style={{ position: "absolute", top: -30, right: -30, width: 120, height: 120, borderRadius: "50%", background: tk.blueLight, border: `1px solid ${tk.blueBorder}` }} />
+                      <div style={{ position: "absolute", bottom: -32, left: -28, width: 100, height: 100, borderRadius: "50%", background: tk.purpleLight, border: `1px solid ${tk.purpleBorder}` }} />
+
+                      <div style={{ position: "relative", display: "grid", gap: 10 }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                          {[{ l: "GitHub", v: "82" }, { l: "LeetCode", v: "74" }, { l: "Codeforces", v: "68" }, { l: "DevIQ", v: "78" }].map((x, i) => (
+                            <div key={i} style={{ background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 10, padding: "10px 11px" }}>
+                              <div style={{ fontSize: 10, color: tk.text3, marginBottom: 4 }}>{x.l}</div>
+                              <div style={{ fontSize: 20, lineHeight: 1, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em" }}>{x.v}<span style={{ fontSize: 11, color: tk.text3, marginLeft: 3 }}>/100</span></div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div style={{ background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 10, padding: 12 }}>
+                          <div style={{ fontSize: 10, color: tk.text3, marginBottom: 8, letterSpacing: "0.05em", textTransform: "uppercase" as const }}>Progress Trend</div>
+                          <svg viewBox="0 0 320 92" width="100%" height="92" role="img" aria-label="Developer score trend">
+                            <polyline fill="none" stroke={tk.track} strokeWidth="1" points="0,72 320,72" />
+                            <polyline fill="none" stroke={tk.blue} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" points="8,65 58,60 110,50 164,54 212,43 262,36 312,28" />
+                            <circle cx="312" cy="28" r="4" fill={tk.blue} />
+                          </svg>
+                        </div>
+
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {[
+                            { t: "Role Fit: Full-Stack", c: tk.green, bg: tk.greenLight, b: tk.greenBorder },
+                            { t: "AI Plan Ready", c: tk.rose, bg: tk.roseLight, b: tk.roseBorder },
+                            { t: "Heatmap Active", c: tk.amber, bg: tk.amberLight, b: tk.amberBorder },
+                          ].map((chip, i) => (
+                            <span key={i} style={{ fontSize: 10, fontWeight: 600, color: chip.c, background: chip.bg, border: `1px solid ${chip.b}`, borderRadius: 999, padding: "4px 9px" }}>{chip.t}</span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </section>
+              <section style={{ marginBottom: 48 }}>
+                <h2 style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", borderWidth: 0 }}>Features</h2>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : isTablet ? "1fr 1fr" : "repeat(3,1fr)", gap: 10 }}>
+                  {[
+                    { icon: <GitHubIcon size={18} color={tk.blue} />, title: "GitHub Analytics", desc: "Repos, stars, language breakdown, skill score, and contribution heatmap.", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder },
+                    { icon: <LeetCodeIcon size={18} color={tk.amber} />, title: "LeetCode Stats", desc: "Problems solved across Easy, Medium, and Hard. Contest ratings, global rank.", color: tk.amber, bg: tk.amberLight, border: tk.amberBorder },
+                    { icon: <CodeforcesIcon size={18} color={tk.purple} />, title: "Codeforces Rating", desc: "Current and peak ratings, rank titles, problems solved, contest history.", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder },
+                    { icon: <span style={{ fontSize: 18 }}>◎</span>, title: "Unified Score", desc: "A single weighted developer score combining activity, problem solving, and CP.", color: tk.green, bg: tk.greenLight, border: tk.greenBorder },
+                    { icon: <span style={{ fontSize: 18 }}>⊞</span>, title: "AI Insights", desc: "Get a sharp AI-generated roast or a personalized 7-day improvement plan.", color: tk.rose, bg: tk.roseLight, border: tk.roseBorder },
+                    { icon: <span style={{ fontSize: 18 }}>⇄</span>, title: "Compare Mode", desc: "Head-to-head comparison between two developers across every metric.", color: tk.teal, bg: tk.greenLight, border: tk.greenBorder },
+                  ].map((f, i) => (
+                    <div key={i} style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, padding: "20px 22px", boxShadow: tk.shadow }}>
+                      <div style={{ width: 36, height: 36, borderRadius: 8, background: f.bg, border: `1px solid ${f.border}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14, color: f.color }}>{f.icon}</div>
+                      <h3 style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 7, letterSpacing: "-0.01em" }}>{f.title}</h3>
+                      <div style={{ fontSize: 12, color: tk.text2, lineHeight: 1.6 }}>{f.desc}</div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <section style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, padding: isMobile ? "28px 22px" : "36px 44px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 20, boxShadow: tk.shadow, marginBottom: 48 }}>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", marginBottom: 6 }}>Ready to measure your profile?</div>
+                  <h2 style={{ fontSize: 15, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", marginBottom: 6 }}>Ready to measure your profile?</h2>
                   <div style={{ fontSize: 13, color: tk.text2 }}>Connect your accounts and get your score in seconds.</div>
                 </div>
                 <button onClick={() => navigate("analyze")} style={{ padding: "10px 22px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, background: tk.accent, color: tk.accentFg, whiteSpace: "nowrap" }}>Get Started</button>
-              </div>
-            </div>
+              </section>
+              {/* SEO-friendly crawlable content */}
+              <section style={{ borderTop: `1px solid ${tk.border}`, paddingTop: 48 }}>
+                <h2 style={{ fontSize: 20, fontWeight: 600, color: tk.text, letterSpacing: "-0.03em", marginBottom: 16 }}>What is DevIQ?</h2>
+                <p style={{ fontSize: 14, color: tk.text2, lineHeight: 1.75, marginBottom: 20, maxWidth: 650 }}>DevIQ is a free developer analytics platform that measures your coding profile across GitHub, LeetCode, and Codeforces. Get a unified developer score, discover which role fits you best, track your progress over time, and receive AI-powered improvement plans.</p>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", marginBottom: 10 }}>How it works</h3>
+                <ol style={{ fontSize: 13, color: tk.text2, lineHeight: 1.8, paddingLeft: 20, marginBottom: 20 }}>
+                  <li>Enter your GitHub, LeetCode, or Codeforces username</li>
+                  <li>DevIQ fetches your repositories, solved problems, ratings, and contributions</li>
+                  <li>Get an instant developer score out of 100 with detailed breakdowns</li>
+                  <li>See which developer roles fit your skill profile</li>
+                  <li>Receive AI-generated insights and a 7-day improvement plan</li>
+                </ol>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", marginBottom: 10 }}>Supported Platforms</h3>
+                <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.75, marginBottom: 20, maxWidth: 650 }}><strong>GitHub</strong> — Repository analysis, language distribution, stars, forks, contribution heatmap, streak tracking, and coding hour patterns. <strong>LeetCode</strong> — Total problems solved (easy, medium, hard), contest rating, global ranking, and badges. <strong>Codeforces</strong> — Current and max rating, rank, problems solved, contests participated, and contribution score.</p>
+                <h3 style={{ fontSize: 15, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", marginBottom: 10 }}>Developer Role Detection</h3>
+                <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.75, maxWidth: 650 }}>DevIQ scans your repository names, descriptions, topics, and language distribution to suggest matching roles: Frontend Developer, Backend Developer, Full-Stack Developer, Mobile Developer, Application Developer, ML/Data Engineer, DevOps/Cloud Engineer, Game Developer, Security Engineer, Embedded/IoT Developer, Blockchain Developer, and Competitive Programmer.</p>
+              </section>
+            </article>
           )}
 
           {/* ANALYZE */}
@@ -4738,6 +5353,7 @@ export default function Page() {
                     tk={tk}
                   />
                 )}
+                <RoleSuggestion data={data} tk={tk} isMobile={isMobile} />
                 {data.github?.repositories && data.github.repositories.length > 0 && (
                   <div id="sec-repos" style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow, marginBottom: 8 }}>
                     <SectionHeader label="Repositories" tk={tk} right={<span style={{ fontSize: 11, color: tk.text3 }}>{data.github.repositories.length}</span>} />
@@ -4770,7 +5386,7 @@ export default function Page() {
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to view your analysis history.</div>
               <button onClick={() => setAuthModal("login")} style={{ padding: "9px 20px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Sign In</button>
             </div>
-          )}
+          )}  
 
           {/* FOLLOWING */}
           {page === "following" && user && <FollowingPage user={user} profile={profile} tk={tk} isMobile={isMobile} onNavigate={(p) => navigate(p)} onProfileSave={handleProfileSave} />}
@@ -4859,7 +5475,7 @@ export default function Page() {
               <button onClick={() => setAuthModal("login")} style={{ padding: "9px 20px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Sign In</button>
             </div>
           )}
-        </div>
+        </main>
       </div>
     </>
   );
