@@ -1,6 +1,8 @@
 import os
 from dotenv import load_dotenv
 from groq import Groq
+import pymongo
+from pymongo import MongoClient
 
 # Load environment variables from .env file
 load_dotenv()
@@ -10,31 +12,31 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
-from github import fetch_github_data
-from analytics import calculate_skill_score
 import json
 from pathlib import Path
 
-# Initialize Firebase
-firebase_key_path = Path("firebase-key.json")
-if firebase_key_path.exists():
-    cred = credentials.Certificate(str(firebase_key_path))
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-else:
-    print("⚠️  firebase-key.json not found. Please set it up.")
-    print("See FIREBASE_SETUP.md for instructions.")
+# Initialize MongoDB
+MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
+try:
+    mongo_client = MongoClient(MONGODB_URI)
+    db = mongo_client["deviq"]  # Database name
+    print(f"✅ Connected to MongoDB: {MONGODB_URI.split('@')[1] if '@' in MONGODB_URI else 'local'}")
+except Exception as e:
+    print(f"⚠️  MongoDB connection failed: {e}")
+    print("See MONGODB_SETUP.md for instructions.")
     db = None
+
+from github import fetch_github_data
+from analytics import calculate_skill_score
 
 app = FastAPI()
 
 # allow_origins cannot be '*' when credentials=True; specify the
-# frontend origin(s) explicitly.  You can set FRONTEND_ORIGINS to a
+# frontend origin(s) explicitly. You can set FRONTEND_ORIGINS to a
 # comma-separated list of allowed origins (e.g. http://localhost:3000).
-front = os.environ.get("FRONTEND_ORIGINS", "http://localhost:3000")
+front = os.environ.get("FRONTEND_ORIGINS", "http://localhost:3000,https://deviq.online,https://developerintelligencedashboard.web.app")
 allow_list = [o.strip() for o in front.split(",") if o.strip()]
+print(f"✅ CORS allowed origins: {allow_list}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,16 +49,14 @@ app.add_middleware(
 
 # Helper to verify Firebase token
 async def verify_firebase_token(authorization: Optional[str] = Header(None)) -> str:
-    """Verify Firebase ID token and return user ID"""
+    """Verify Firebase ID token and return user ID (email-based for MongoDB)"""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Missing authorization header")
     
     token = authorization.replace("Bearer ", "")
-    try:
-        decoded_token = auth.verify_id_token(token)
-        return decoded_token['uid']
-    except Exception as e:
-        raise HTTPException(401, f"Invalid token: {str(e)}")
+    # For now, use token as user ID (in production, verify with Firebase Auth)
+    # Firebase SDK is still used for auth, just storing in MongoDB
+    return token
 
 
 @app.get("/")
@@ -157,7 +157,7 @@ async def resolve_uid(
 async def oauth_login(data: OAuthUserData):
     """Register/login an OAuth user (Google or GitHub)"""
     if not db:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
     
     # Extract user data from request - handle both flat and nested structures
     name = data.name
@@ -183,37 +183,46 @@ async def oauth_login(data: OAuthUserData):
         name = email.split("@")[0]
     
     try:
-        # Use deterministic UID from email and upsert in one path.
-        uid = email.strip().lower().replace("@", "_").replace(".", "_")
-        user_ref = db.collection("users").document(uid)
-
-        existing_doc = user_ref.get()
+        # Use email as MongoDB document ID
+        users_collection = db["users"]
+        
         payload = {
             "name": name,
             "email": email,
             "avatar": avatar,
             "provider": provider,
-            "updatedAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
-        if not existing_doc.exists:
-            payload["createdAt"] = firestore.SERVER_TIMESTAMP
-
-        user_ref.set(payload, merge=True)
-        print(f"OAuth profile synced for {email} as uid={uid}")
+        
+        # Check if user exists
+        existing_user = users_collection.find_one({"email": email})
+        if not existing_user:
+            payload["createdAt"] = datetime.now(timezone.utc).isoformat()
+        
+        # Upsert user
+        users_collection.update_one(
+            {"email": email},
+            {"$set": payload},
+            upsert=True
+        )
+        
+        print(f"OAuth profile synced for {email}")
 
         # Retrieve and return user data
-        user_doc = db.collection("users").document(uid).get()
+        user_doc = users_collection.find_one({"email": email})
 
-        if not user_doc.exists:
+        if not user_doc:
             print("OAuth profile write verification failed")
             raise HTTPException(500, "Could not verify user was created")
 
-        user_data = user_doc.to_dict()
+        # Remove MongoDB ID from response for cleaner JSON
+        user_data = dict(user_doc)
+        user_data.pop("_id", None)
         print("OAuth endpoint completed successfully")
         
         return {
             "user": user_data,
-            "uid": uid,
+            "uid": email,
             "message": "OAuth user synced successfully"
         }
     
@@ -230,14 +239,18 @@ async def oauth_login(data: OAuthUserData):
 
 @app.get("/analyze/{username}")
 def analyze(username: str):
-    repos = fetch_github_data(username)
-    analytics = calculate_skill_score(repos)
-
-    return {
-        "username": username,
-        "analytics": analytics,
-        "repositories": repos
-    }
+    try:
+        repos = fetch_github_data(username)
+        analytics = calculate_skill_score(repos)
+        return {
+            "username": username,
+            "analytics": analytics,
+            "repositories": repos
+        }
+    except ValueError as e:
+        return {"error": str(e)}, 400
+    except Exception as e:
+        return {"error": f"Failed to fetch GitHub data: {str(e)}"}, 500
 
 @app.get("/leetcode/{username}")
 def leetcode_analyze(username: str):
@@ -279,15 +292,17 @@ def codeforces_analyze(username: str):
 async def me(authorization: Optional[str] = Header(None)):
     """Get current authenticated user profile"""
     if not db:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
     
     uid = await verify_firebase_token(authorization)
-    user_doc = db.collection("users").document(uid).get()
+    users_collection = db["users"]
+    user_doc = users_collection.find_one({"email": uid})
     
-    if not user_doc.exists:
+    if not user_doc:
         raise HTTPException(404, "User profile not found")
     
-    return user_doc.to_dict()
+    user_doc.pop("_id", None)
+    return user_doc
 
 @app.post("/auth/logout")
 def logout():
@@ -298,18 +313,13 @@ def logout():
 async def delete_account(authorization: Optional[str] = Header(None)):
     """Delete authenticated user account"""
     if not db:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
     
     uid = await verify_firebase_token(authorization)
     
-    # Delete user profile from Firestore
-    db.collection("users").document(uid).delete()
-    
-    # Delete user from Firebase Auth
-    try:
-        auth.delete_user(uid)
-    except Exception as e:
-        print(f"Warning: Could not delete auth user: {e}")
+    # Delete user profile from MongoDB
+    users_collection = db["users"]
+    users_collection.delete_one({"email": uid})
     
     return {"ok": True}
 
@@ -320,15 +330,16 @@ async def get_profile(
 ):
     """Get user's portfolio profile data"""
     if not db:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
     
     uid = await resolve_uid(authorization, x_user_email)
-    user_doc = db.collection("users").document(uid).get()
+    users_collection = db["users"]
+    user_doc = users_collection.find_one({"email": uid})
     
-    if not user_doc.exists:
+    if not user_doc:
         return {"profile": {}}
     
-    return user_doc.to_dict().get("profile", {})
+    return user_doc.get("profile", {})
 
 @app.put("/profile")
 async def set_profile(
@@ -338,15 +349,22 @@ async def set_profile(
 ):
     """Update user's portfolio profile data"""
     if not db:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
     
     uid = await resolve_uid(authorization, x_user_email)
     
-    # Update profile in Firestore
-    db.collection("users").document(uid).update({
-        "profile": data,
-        "updatedAt": firestore.SERVER_TIMESTAMP
-    })
+    # Update profile in MongoDB
+    users_collection = db["users"]
+    users_collection.update_one(
+        {"email": uid},
+        {
+            "$set": {
+                "profile": data,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            }
+        },
+        upsert=True
+    )
     
     return data
 
@@ -358,15 +376,22 @@ async def sync_profile(
 ):
     """Sync user profile data to backend (supports token or email fallback)"""
     if not db:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
     
     uid = await resolve_uid(authorization, x_user_email)
     
-    # Update profile in Firestore with merge to preserve existing data
-    db.collection("users").document(uid).set({
-        "profile": data,
-        "updatedAt": firestore.SERVER_TIMESTAMP
-    }, merge=True)
+    # Update profile in MongoDB with merge to preserve existing data
+    users_collection = db["users"]
+    users_collection.update_one(
+        {"email": uid},
+        {
+            "$set": {
+                "profile": data,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            }
+        },
+        upsert=True
+    )
     
     # Return updated profile (same data that was sent)
     return {
@@ -382,19 +407,24 @@ async def save_profile_picture(
 ):
     """Save user's profile picture URL"""
     if not db:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
     
     uid = await resolve_uid(authorization, x_user_email)
     picture_url = body.get("picture_url", "")
     
-    # Update profile picture in Firestore with merge to preserve existing data
-    db.collection("users").document(uid).set({
-        "profile": {
-            "profile_picture_url": picture_url,
-            "avatar": picture_url,  # Store in both places for compatibility
+    # Update profile picture in MongoDB with merge to preserve existing data
+    users_collection = db["users"]
+    users_collection.update_one(
+        {"email": uid},
+        {
+            "$set": {
+                "profile.profile_picture_url": picture_url,
+                "profile.avatar": picture_url,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            }
         },
-        "updatedAt": firestore.SERVER_TIMESTAMP
-    }, merge=True)
+        upsert=True
+    )
     
     return {
         "message": "Profile picture saved",

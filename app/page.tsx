@@ -16,7 +16,7 @@ import { signInWithGoogle, signInWithGitHub } from "@/lib/firebaseAuth";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
-// API base: Direct backend URL for static deployment
+// API base: Render backend URL
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com' 
 
 // Secrets removed - these operations should be done via backend API
@@ -378,8 +378,11 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
   const isLocalFrontend = typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
+  // If NEXT_PUBLIC_API_BASE_URL is explicitly set and it's a production URL, don't add localhost fallbacks
+  const isProductionAPI = API && API.includes('onrender.com');
+  
   const candidateBases = [API];
-  if (isLocalFrontend) {
+  if (isLocalFrontend && !isProductionAPI) {
     candidateBases.push("http://localhost:8000", "http://127.0.0.1:8000");
   }
 
