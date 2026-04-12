@@ -4502,13 +4502,31 @@ export default function Page() {
       // Save backend data to localStorage for offline access
       saveProfile(mergedUser.email, p);
       setProfile(p);
-    } catch {
+      
+      // Sync merged profile to cloud immediately for cross-device availability
+      console.log('☁️ Syncing profile to cloud after login...');
+      syncProfile(mergedUser.email, p).then(saved => {
+        console.log('✅ Profile synced to cloud after login');
+        saveProfile(mergedUser.email, saved);
+        lastPulledHashRef.current = JSON.stringify(saved);
+      }).catch(err => {
+        console.warn('⚠️ Initial sync after login failed, but profile is cached locally:', err);
+      });
+    } catch (err) {
+      console.error('Error loading profile on login:', err);
       // Backend failed - load from localStorage and sync to backend
       const p = loadProfile(mergedUser.email);
       if (!p.joinedAt) p.joinedAt = new Date().toISOString();
       if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
       // Try to sync local data to backend for future use
-      syncProfile(mergedUser.email, p).then(saved => setProfile(saved)).catch(() => setProfile(p));
+      console.log('🔄 Syncing local profile to cloud after login (backend unavailable initially)');
+      syncProfile(mergedUser.email, p).then(saved => {
+        console.log('✅ Local profile synced to cloud');
+        setProfile(saved);
+      }).catch(() => {
+        console.warn('⚠️ Could not sync to cloud, using local profile');
+        setProfile(p);
+      });
     }
     setAuthModal(null); setMenuOpen(false);
   };
