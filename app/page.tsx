@@ -12,6 +12,7 @@ import {
   Legend,
   Filler,
 } from "chart.js";
+import { signInWithGoogle, signInWithGitHub } from "@/lib/firebaseAuth";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -1646,92 +1647,37 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, [onClose]);
 
+  // Firebase Auth is handled directly in handleSocialAuth, no need for event listeners
   useEffect(() => {
-    const handler = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      if (event.data?.type === "OAUTH_SUCCESS") {
-        const { name: n, email: e, avatar, provider } = event.data;
-        const callbackAvatar = normalizeAvatarUrl(avatar);
-
-        // For Google, prefer backend gmail session endpoint, then sync with callback payload.
-        // For GitHub, use regular OAuth persist flow.
-        const persist = async () => {
-          if (provider === "google") {
-            const gmailUser = await apiGmailLogin({ name: n, email: e, avatar: callbackAvatar });
-            const cloudUser = await apiFetchSession();
-            if (cloudUser) {
-              return enrichAuthUser({
-                ...cloudUser,
-                avatar: cloudUser.avatar || callbackAvatar,
-                provider: normalizeProvider(cloudUser.provider) || "google",
-              });
-            }
-            if (gmailUser) return enrichAuthUser({ ...gmailUser, avatar: gmailUser.avatar || callbackAvatar, provider: "google" });
-          }
-          return await apiOAuth({ name: n, email: e, avatar: callbackAvatar, provider });
-        };
-
-        persist()
-          .then(async (u) => {
-            const resolved = enrichAuthUser({ ...u, avatar: u.avatar || callbackAvatar });
-            if (resolved.avatar) {
-              await apiSaveProfilePicture(resolved.avatar);
-              const refreshed = await apiFetchSession();
-              if (refreshed?.avatar) resolved.avatar = refreshed.avatar;
-            }
-            setSuccess(true);
-            setOauthLoading(null);
-            setTimeout(() => onAuth(resolved), 500);
-          })
-          .catch(err => {
-            setGlobalError(err.message || "OAuth failed.");
-            setOauthLoading(null);
-          });
-      }
-      if (event.data?.type === "OAUTH_ERROR") { setGlobalError(event.data.message || "OAuth failed."); setOauthLoading(null); }
-    };
-    window.addEventListener("message", handler); return () => window.removeEventListener("message", handler);
+    // Cleanup effect
+    return () => {};
   }, [onAuth]);
-
-  const launchOAuth = useCallback((provider: "google" | "github") => {
-    const clientId = provider === "google" ? GOOGLE_CLIENT_ID : GITHUB_CLIENT_ID;
-    if (!clientId) { setGlobalError(`${provider === "google" ? "Google" : "GitHub"} OAuth not configured.`); return; }
-    const state = Math.random().toString(36).slice(2);
-    sessionStorage.setItem("oauth_state", state);
-    setOauthLoading(provider);
-    const popup = openOAuthPopup(provider === "google" ? buildGoogleURL(state) : buildGitHubURL(state), `Sign in with ${provider === "google" ? "Google" : "GitHub"}`);
-    if (!popup) { setGlobalError("Popup blocked."); setOauthLoading(null); return; }
-    // Check if popup closed - with better error handling for COOP
-    const checkClosed = () => {
-      try {
-        if (popup.closed) {
-          clearInterval(poll);
-          setOauthLoading(null);
-        }
-      } catch (e) {
-        // COOP policy may block access, cleanup and stop polling
-        clearInterval(poll);
-      }
-    };
-    const poll = setInterval(checkClosed, 1000);
-    // Also cleanup after 10 minutes max
-    const timeout = setTimeout(() => { clearInterval(poll); setOauthLoading(null); }, 600000);
-    const originalUnload = () => { clearInterval(poll); clearTimeout(timeout); };
-    window.addEventListener('beforeunload', originalUnload);
-    // Cleanup on unmount
-    return () => { clearInterval(poll); clearTimeout(timeout); window.removeEventListener('beforeunload', originalUnload); };
-  }, []);
 
   const handleSocialAuth = useCallback(async (provider: "google" | "github") => {
     setGlobalError("");
     setOauthLoading(provider);
     try {
-      // Always use popup OAuth so user explicitly chooses account.
-      launchOAuth(provider);
-    } catch {
-      launchOAuth(provider);
+      let authUser;
+      if (provider === "google") {
+        authUser = await signInWithGoogle();
+      } else {
+        authUser = await signInWithGitHub();
+      }
+      
+      // Successfully authenticated with Firebase
+      setSuccess(true);
+      setOauthLoading(null);
+      setTimeout(() => onAuth({
+        name: authUser.name,
+        email: authUser.email,
+        avatar: authUser.avatar,
+        provider: authUser.provider as any,
+      }), 500);
+    } catch (err: any) {
+      setGlobalError(err.message || `${provider === "google" ? "Google" : "GitHub"} authentication failed.`);
+      setOauthLoading(null);
     }
-  }, [launchOAuth, onAuth]);
+  }, [onAuth]);
 
   const handleSubmit = () => {
     const allFields: Record<string, boolean> = isLogin ? { email: true, password: true } : { name: true, email: true, password: true, confirm: true };

@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server";
 
+export const revalidate = false;
+
 const BACKEND_BASE =
   process.env.BACKEND_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||
