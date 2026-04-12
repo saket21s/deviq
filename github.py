@@ -12,7 +12,8 @@ GITHUB_API_URL = "https://api.github.com"
 def fetch_github_data(username: str) -> List[Dict[str, Any]]:
     """Fetch GitHub user data and repositories"""
     if not GITHUB_TOKEN:
-        raise ValueError("GITHUB_TOKEN not configured. Please set GITHUB_TOKEN environment variable.")
+        print("⚠️ Warning: GITHUB_TOKEN not set. GitHub data fetching won't work.")
+        return []
     
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",

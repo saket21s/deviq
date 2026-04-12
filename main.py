@@ -9,6 +9,7 @@ load_dotenv()
 
 from fastapi import FastAPI, Request, Response, HTTPException, Header, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
@@ -248,9 +249,9 @@ def analyze(username: str):
             "repositories": repos
         }
     except ValueError as e:
-        return {"error": str(e)}, 400
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        return {"error": f"Failed to fetch GitHub data: {str(e)}"}, 500
+        raise HTTPException(status_code=500, detail=f"Failed to fetch GitHub data: {str(e)}")
 
 @app.get("/leetcode/{username}")
 def leetcode_analyze(username: str):
