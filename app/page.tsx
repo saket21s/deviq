@@ -1674,7 +1674,24 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
         provider: authUser.provider as any,
       }), 500);
     } catch (err: any) {
-      setGlobalError(err.message || `${provider === "google" ? "Google" : "GitHub"} authentication failed.`);
+      console.error(`${provider} auth error:`, err);
+      
+      // Provide more helpful error messages
+      let errorMessage = `${provider === "google" ? "Google" : "GitHub"} authentication failed.`;
+      
+      if (err.code === 'auth/configuration-not-found') {
+        errorMessage = `${provider === "google" ? "Google" : "GitHub"} OAuth is not enabled in Firebase Console. Please check FIREBASE_AUTH_SETUP.md`;
+      } else if (err.code === 'auth/popup-blocked') {
+        errorMessage = 'Popup was blocked. Please allow popups for this site.';
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        errorMessage = 'Sign-in was cancelled.';
+      } else if (err.code === 'auth/operation-not-supported-in-this-environment') {
+        errorMessage = 'Authentication not supported in this environment. Make sure you\'re using a browser.';
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setGlobalError(errorMessage);
       setOauthLoading(null);
     }
   }, [onAuth]);

@@ -22,8 +22,19 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
+// Validate Firebase configuration
+if (!firebaseConfig.apiKey || !firebaseConfig.authDomain || !firebaseConfig.projectId) {
+  console.error('❌ Firebase configuration is incomplete. Check your environment variables:');
+  console.error('Missing:', {
+    apiKey: !firebaseConfig.apiKey ? 'NEXT_PUBLIC_FIREBASE_API_KEY' : null,
+    authDomain: !firebaseConfig.authDomain ? 'NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN' : null,
+    projectId: !firebaseConfig.projectId ? 'NEXT_PUBLIC_FIREBASE_PROJECT_ID' : null,
+  });
+}
+
 // Initialize Firebase
 export const app = initializeApp(firebaseConfig);
+console.log('✅ Firebase initialized with project:', firebaseConfig.projectId);
 
 // Initialize Auth
 export const auth = getAuth(app);

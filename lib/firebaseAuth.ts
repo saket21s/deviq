@@ -102,52 +102,70 @@ export async function signInWithEmail(email: string, password: string): Promise<
  * Sign in with Google
  */
 export async function signInWithGoogle(): Promise<AuthUser> {
-  const result = await signInWithPopup(auth, googleProvider);
-  
-  // Check if user exists in Firestore
-  let profile = await getUserProfile(result.user.uid);
-  
-  // If not, create new user profile
-  if (!profile) {
-    profile = await createUserProfile(
-      result.user,
-      'google',
-      result.user.photoURL || undefined
-    );
-  } else {
-    // Update avatar if changed
-    await updateUserProfile(result.user.uid, {
-      avatar: result.user.photoURL || profile.avatar,
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    
+    // Check if user exists in Firestore
+    let profile = await getUserProfile(result.user.uid);
+    
+    // If not, create new user profile
+    if (!profile) {
+      profile = await createUserProfile(
+        result.user,
+        'google',
+        result.user.photoURL || undefined
+      );
+    } else {
+      // Update avatar if changed
+      await updateUserProfile(result.user.uid, {
+        avatar: result.user.photoURL || profile.avatar,
+      });
+    }
+    
+    return profile;
+  } catch (error: any) {
+    console.error('Google Sign-In Error:', {
+      code: error.code,
+      message: error.message,
+      customData: error.customData,
     });
+    throw error;
   }
-  
-  return profile;
 }
 
 /**
  * Sign in with GitHub
  */
 export async function signInWithGitHub(): Promise<AuthUser> {
-  const result = await signInWithPopup(auth, githubProvider);
-  
-  // Check if user exists in Firestore
-  let profile = await getUserProfile(result.user.uid);
-  
-  // If not, create new user profile
-  if (!profile) {
-    profile = await createUserProfile(
-      result.user,
-      'github',
-      result.user.photoURL || undefined
-    );
-  } else {
-    // Update avatar if changed
-    await updateUserProfile(result.user.uid, {
-      avatar: result.user.photoURL || profile.avatar,
+  try {
+    const result = await signInWithPopup(auth, githubProvider);
+    
+    // Check if user exists in Firestore
+    let profile = await getUserProfile(result.user.uid);
+    
+    // If not, create new user profile
+    if (!profile) {
+      profile = await createUserProfile(
+        result.user,
+        'github',
+        result.user.photoURL || undefined
+      );
+    } else {
+      // Update avatar if changed
+      await updateUserProfile(result.user.uid, {
+        avatar: result.user.photoURL || profile.avatar,
+      });
+    }
+    
+    return profile;
+  } catch (error: any) {
+    console.error('GitHub Sign-In Error:', {
+      code: error.code,
+      message: error.message,
+      customData: error.customData,
     });
+    throw error;
   }
-  
-  return profile;
 }
 
 /**
