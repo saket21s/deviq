@@ -4513,6 +4513,17 @@ export default function Page() {
     setAuthModal(null); setMenuOpen(false);
   };
   const handleLogout = async () => { 
+    // Sync profile to cloud before logging out
+    if (user && profile) {
+      try {
+        console.log('💾 Syncing profile before logout...');
+        await syncProfile(user.email, profile).catch(() => {
+          console.log('⚠️  Profile sync failed, but continuing with logout');
+        });
+      } catch {
+        console.error('Error during logout sync');
+      }
+    }
     await apiLogout().catch(() => {});
     clearSession();
     setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home");
