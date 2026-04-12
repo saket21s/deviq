@@ -71,6 +71,11 @@ export const metadata: Metadata = {
     creator: "@deviq_online",
   },
   category: "technology",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/favicon.ico",
+  },
   other: {
     "google-site-verification": "",
   },
