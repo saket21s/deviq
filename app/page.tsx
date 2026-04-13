@@ -823,7 +823,7 @@ function openOAuthPopup(url: string, title: string): Window | null {
   return window.open(url, title, `width=${w},height=${h},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes`);
 }
 function buildGoogleURL(state: string): string {
-  return `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({ client_id: GOOGLE_CLIENT_ID, redirect_uri: `${window.location.origin}/auth/callback/google`, response_type: "code", scope: "openid email profile", state, access_type: "offline", prompt: "select_account consent" })}`;
+  return `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({ client_id: GOOGLE_CLIENT_ID, redirect_uri: `${window.location.origin}/auth/callback/google`, response_type: "code", scope: "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email", state, access_type: "offline", prompt: "select_account consent" })}`;
 }
 function buildGitHubURL(state: string): string {
   return `https://github.com/login/oauth/authorize?${new URLSearchParams({ client_id: GITHUB_CLIENT_ID, redirect_uri: `${window.location.origin}/auth/callback/github`, scope: "read:user user:email", state })}`;
