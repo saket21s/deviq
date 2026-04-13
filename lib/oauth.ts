@@ -11,6 +11,9 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhos
 export const AUTH_TOKEN_KEY = "auth_token";
 export const USER_KEY = "deviq_user";
 
+const OAUTH_STATE_SESSION_PREFIX = "oauth_state_session_";
+const OAUTH_STATE_LOCAL_PREFIX = "oauth_state_local_";
+
 export interface AuthUser {
   id: string;
   name: string;
@@ -38,8 +41,8 @@ export function initiateGoogleLogin(): void {
   const scope = "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
   const state = generateRandomState();
   
-  // Store state in sessionStorage for verification
-  sessionStorage.setItem("oauth_state", state);
+  // Store in both sessionStorage and localStorage to survive redirect edge cases
+  storeOAuthState("google", state);
   
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
@@ -62,8 +65,8 @@ export function initiateGithubLogin(): void {
   const scope = "user:email";
   const state = generateRandomState();
   
-  // Store state in sessionStorage for verification
-  sessionStorage.setItem("oauth_state", state);
+  // Store in both sessionStorage and localStorage to survive redirect edge cases
+  storeOAuthState("github", state);
   
   const params = new URLSearchParams({
     client_id: GITHUB_CLIENT_ID,
@@ -167,9 +170,33 @@ function generateRandomState(): string {
  * Verify OAuth state matches
  */
 export function verifyState(state: string): boolean {
+  // Backward-compatible fallback (older builds used a shared key)
   const stored = sessionStorage.getItem("oauth_state");
   sessionStorage.removeItem("oauth_state");
   return stored === state;
+}
+
+export function verifyStateForProvider(state: string, provider: "google" | "github"): boolean {
+  if (!state) return false;
+
+  const sessionKey = `${OAUTH_STATE_SESSION_PREFIX}${provider}`;
+  const localKey = `${OAUTH_STATE_LOCAL_PREFIX}${provider}`;
+
+  const sessionState = sessionStorage.getItem(sessionKey);
+  const localState = localStorage.getItem(localKey);
+
+  // Cleanup state values once read to avoid replay
+  sessionStorage.removeItem(sessionKey);
+  localStorage.removeItem(localKey);
+
+  return sessionState === state || localState === state;
+}
+
+function storeOAuthState(provider: "google" | "github", state: string): void {
+  const sessionKey = `${OAUTH_STATE_SESSION_PREFIX}${provider}`;
+  const localKey = `${OAUTH_STATE_LOCAL_PREFIX}${provider}`;
+  sessionStorage.setItem(sessionKey, state);
+  localStorage.setItem(localKey, state);
 }
 
 /**

@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { exchangeCodeForToken, verifyState } from "@/lib/oauth";
+import { exchangeCodeForToken, verifyStateForProvider } from "@/lib/oauth";
 
 const SESSION_KEY = "deviq_session";
 const AUTH_TOKEN_KEY = "auth_token";
@@ -28,7 +28,7 @@ function GoogleCallbackContent() {
         }
 
         // Verify state
-        if (!verifyState(state || "")) {
+        if (!verifyStateForProvider(state || "", "google")) {
           setError("Invalid state parameter - potential CSRF attack");
           setLoading(false);
           return;
