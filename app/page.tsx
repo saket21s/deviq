@@ -4526,7 +4526,7 @@ export default function Page() {
     };
   }, [profile, user]);
 
-  const handleLogin = async (u: AuthUser) => {
+  const handleLogin = useCallback(async (u: AuthUser) => {
     const mergedUser = enrichAuthUser(u);
     setUser(mergedUser);
     // store locally in case of offline fallback
@@ -4569,19 +4569,31 @@ export default function Page() {
       });
     }
     setAuthModal(null); setMenuOpen(false);
-  };
+  }, []);
 
+  // Keep a module-level flag so this effect truly only runs once per page load,
+  // even under React 18 StrictMode double-invocation.
   useEffect(() => {
+    // Guard: only process once per mount (prevents StrictMode double-fire and
+    // any re-render from causing a second exchange attempt).
+    if ((window as any)._oauthProcessed) return;
+
     const PENDING_OAUTH_KEY = "deviq_pending_oauth";
     const PENDING_OAUTH_LOCAL_KEY = "deviq_pending_oauth_local";
 
-    const raw = sessionStorage.getItem(PENDING_OAUTH_KEY) || localStorage.getItem(PENDING_OAUTH_LOCAL_KEY);
+    const raw =
+      sessionStorage.getItem(PENDING_OAUTH_KEY) ||
+      localStorage.getItem(PENDING_OAUTH_LOCAL_KEY);
+
     if (!raw) return;
 
-    const clearPending = () => {
-      sessionStorage.removeItem(PENDING_OAUTH_KEY);
-      localStorage.removeItem(PENDING_OAUTH_LOCAL_KEY);
-    };
+    // Mark processed immediately — before any async work — so even if the
+    // component re-renders during the exchange this block is skipped.
+    (window as any)._oauthProcessed = true;
+
+    // Clear storage immediately so a page refresh doesn't re-process a stale code.
+    sessionStorage.removeItem(PENDING_OAUTH_KEY);
+    localStorage.removeItem(PENDING_OAUTH_LOCAL_KEY);
 
     const run = async () => {
       try {
@@ -4596,35 +4608,25 @@ export default function Page() {
         const code = pending.code;
         const state = pending.state || "";
 
-        if (!provider || !code) {
-          clearPending();
+        if (!provider || !code) return;
+
+        // Drop expired callbacks (10 minutes is generous for slow mobile flows)
+        if (
+          pending.createdAt &&
+          Date.now() - pending.createdAt > 10 * 60 * 1000
+        ) {
+          console.warn("OAuth callback expired — ignoring");
           return;
         }
 
-        // Drop very old callbacks but keep a generous window for slow mobile flows.
-        if (pending.createdAt && Date.now() - pending.createdAt > 15 * 60 * 1000) {
-          clearPending();
-          throw new Error("OAuth callback expired. Please sign in again.");
-        }
-
-        // Verify state when available, but do not fail hard on storage edge cases.
+        // State verification (soft — warns but doesn't block)
         if (!verifyStateForProvider(state, provider)) {
-          console.warn("OAuth state mismatch; continuing with best-effort completion.");
+          console.warn("OAuth state mismatch — proceeding with caution");
         }
 
-        let exchangeResult: Awaited<ReturnType<typeof exchangeCodeForToken>> | null = null;
-        let lastErr: unknown = null;
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          try {
-            exchangeResult = await exchangeCodeForToken(code, provider);
-            break;
-          } catch (err) {
-            lastErr = err;
-            if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 700));
-          }
-        }
-
-        if (!exchangeResult) throw lastErr instanceof Error ? lastErr : new Error("OAuth exchange failed");
+        // exchangeCodeForToken ALREADY clears storage inside itself, but we
+        // cleared it above too so the effect can never loop regardless.
+        const exchangeResult = await exchangeCodeForToken(code, provider);
 
         if (exchangeResult.token) {
           localStorage.setItem(AUTH_TOKEN_KEY, exchangeResult.token);
@@ -4632,14 +4634,14 @@ export default function Page() {
 
         const normalized = coerceAuthUser(exchangeResult.user, { provider });
         await handleLogin(normalized);
-        clearPending();
       } catch (err) {
-        console.error("Deferred OAuth completion failed:", err);
+        console.error("OAuth completion failed:", err);
       }
     };
 
     run();
-  }, [handleLogin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleLogout = async () => {
     const userToSync = user;
