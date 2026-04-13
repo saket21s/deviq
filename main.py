@@ -48,6 +48,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def log_requests(request, call_next):
+    print(f"📌 Request: {request.method} {request.url.path}")
+    print(f"📌 Origin: {request.headers.get('origin', 'NO ORIGIN')}")
+    response = await call_next(request)
+    return response
+
 
 # Helper to verify Firebase token
 async def verify_firebase_token(authorization: Optional[str] = Header(None)) -> str:
