@@ -1104,8 +1104,8 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
   const [hdata, setHdata] = useState<HeatmapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
-  // GitHub-style colors: empty day is very light, then progressively darker
-  const heatColors = dark ? ["#0d1117", "#0d3320", "#155230", "#1e7a47", "#26a35e"] : ["#EBEDF0", "#C6E48B", "#7BC96F", "#239A3B", "#196127"];
+  // Exact GitHub contribution calendar colors
+  const heatColors = dark ? ["#0E1117", "#0D3A1F", "#1F6E3E", "#2EA043", "#3FB950"] : ["#EBEDF0", "#C6E48B", "#7BC96F", "#239A3B", "#196127"];
   useEffect(() => {
     if (!username) return;
     let cancelled = false;
