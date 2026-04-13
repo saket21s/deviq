@@ -131,16 +131,17 @@ export async function exchangeCodeForToken(
   // ── 1. Clear pending storage FIRST (prevents retry loops) ──────────────
   clearPendingOAuth();
 
-  // ── 2. Call the Next.js API route (keeps secrets server-side) ──────────
+  // ── 2. Exchange code with Vercel API route (keeps secrets server-side) ──
   const redirectUri = `${window.location.origin}/auth/callback/${provider}`;
 
-  const apiRoute =
-    provider === "google" ? "/api/auth/google" : "/api/auth/github";
-
-  const res = await fetch(apiRoute, {
+  const res = await fetch(`/api/auth/${provider}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    credentials: "include",
+    body: JSON.stringify({
+      code,
+      redirect_uri: redirectUri,
+    }),
   });
 
   if (!res.ok) {
@@ -148,52 +149,21 @@ export async function exchangeCodeForToken(
     throw new Error(body.error || `OAuth exchange failed (${res.status})`);
   }
 
-  const profile = await res.json() as {
-    name?: string;
-    email?: string;
-    avatar?: string;
-    picture?: string;
-  };
+  const data = await res.json();
 
   const user: OAuthUser = {
-    name: profile.name || "User",
-    email: profile.email || "",
-    avatar: profile.avatar || profile.picture,
+    name: data.name || data.user?.name || "User",
+    email: data.email || data.user?.email || "",
+    avatar: data.avatar || data.user?.picture || data.profile_picture_url,
     provider,
   };
 
-  // ── 3. Optionally register/login with YOUR backend ────────────────────
-  // If your backend returns a JWT token, store it here.
-  // This is a best-effort call — failures fall back to local session.
+  // Store token if backend returned one
   let token: string | undefined;
-  try {
-    const API =
-      process.env.NEXT_PUBLIC_API_BASE_URL ||
-      "https://developer-portfolio-backend-bu76.onrender.com";
-
-    const oauthRes = await fetch(`${API}/auth/oauth`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        name: user.name,
-        email: user.email,
-        avatar: user.avatar,
-        provider,
-        profile_picture_url: user.avatar,
-        user: { name: user.name, email: user.email, picture: user.avatar },
-      }),
-    });
-
-    if (oauthRes.ok) {
-      const data = await oauthRes.json();
-      token = data?.access_token;
-      if (token) {
-        localStorage.setItem(AUTH_TOKEN_KEY, token);
-      }
-    }
-  } catch {
-    // Backend unavailable — local session will be used as fallback
+  const accessToken = data?.access_token;
+  if (accessToken && typeof accessToken === "string") {
+    token = accessToken;
+    localStorage.setItem(AUTH_TOKEN_KEY, accessToken);
   }
 
   return { user, token };

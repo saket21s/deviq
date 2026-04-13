@@ -1,94 +1,69 @@
+/**
+ * app/api/auth/google/route.ts
+ *
+ * Exchanges a Google OAuth authorization code for user profile data.
+ * Runs server-side so the client secret is never exposed to the browser.
+ *
+ * Required environment variables (add to .env.local):
+ *   NEXT_PUBLIC_GOOGLE_CLIENT_ID=...
+ *   GOOGLE_CLIENT_SECRET=...
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 
-/**
- * POST /api/auth/google
- *
- * Exchanges an OAuth authorization code (from frontend) for a Google user profile.
- * The client_secret is kept server-side here, not exposed to the browser.
- */
-export async function POST(request: NextRequest) {
+const CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!;
+const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
+
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    const { code, redirect_uri } = body;
+    const { code, redirect_uri } = await req.json();
 
     if (!code || !redirect_uri) {
-      return NextResponse.json(
-        { error: "Missing code or redirect_uri" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing code or redirect_uri" }, { status: 400 });
     }
 
-    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-
-    if (!clientId || !clientSecret) {
-      console.error("Google OAuth not configured");
-      return NextResponse.json(
-        { error: "Google OAuth not configured" },
-        { status: 500 }
-      );
+    if (!CLIENT_ID || !CLIENT_SECRET) {
+      return NextResponse.json({ error: "Google OAuth not configured on server." }, { status: 500 });
     }
 
-    // Step 1: Exchange code for tokens
+    // Exchange code for tokens
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
         code,
-        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
         redirect_uri,
-      }).toString(),
+        grant_type: "authorization_code",
+      }),
     });
-
-    if (!tokenRes.ok) {
-      const errorText = await tokenRes.text();
-      console.error("Google token exchange failed:", errorText);
-      return NextResponse.json(
-        { error: "Google token exchange failed" },
-        { status: 400 }
-      );
-    }
 
     const tokens = await tokenRes.json();
-    const accessToken = tokens.access_token;
 
-    if (!accessToken) {
-      return NextResponse.json(
-        { error: "No access token from Google" },
-        { status: 400 }
-      );
+    if (!tokenRes.ok || tokens.error) {
+      console.error("Google token error:", tokens);
+      return NextResponse.json({ error: tokens.error_description || "Token exchange failed" }, { status: 400 });
     }
 
-    // Step 2: Fetch user profile
-    const profileRes = await fetch(
-      "https://www.googleapis.com/oauth2/v2/userinfo",
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
+    // Get user info
+    const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+    });
 
-    if (!profileRes.ok) {
-      console.error("Google profile fetch failed");
-      return NextResponse.json(
-        { error: "Failed to fetch Google profile" },
-        { status: 400 }
-      );
+    const user = await userRes.json();
+
+    if (!userRes.ok) {
+      return NextResponse.json({ error: "Failed to fetch Google user info" }, { status: 400 });
     }
-
-    const profile = await profileRes.json();
 
     return NextResponse.json({
-      name: profile.name || profile.given_name || "User",
-      email: profile.email,
-      avatar: profile.picture,
+      name: user.name,
+      email: user.email,
+      avatar: user.picture,
     });
-  } catch (error) {
-    console.error("Google OAuth error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error("Google OAuth API error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

@@ -1,116 +1,93 @@
+/**
+ * app/api/auth/github/route.ts
+ *
+ * Exchanges a GitHub OAuth authorization code for user profile data.
+ * Runs server-side so the client secret is never exposed to the browser.
+ *
+ * Required environment variables (add to .env.local):
+ *   NEXT_PUBLIC_GITHUB_CLIENT_ID=...
+ *   GITHUB_CLIENT_SECRET=...
+ */
+
 import { NextRequest, NextResponse } from "next/server";
 
-/**
- * POST /api/auth/github
- *
- * Exchanges an OAuth authorization code (from frontend) for a GitHub user profile.
- * The client_secret is kept server-side here, not exposed to the browser.
- */
-export async function POST(request: NextRequest) {
+const CLIENT_ID = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID!;
+const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET!;
+
+export async function POST(req: NextRequest) {
   try {
-    const body = await request.json();
-    const { code, redirect_uri } = body;
+    const { code } = await req.json();
 
-    if (!code || !redirect_uri) {
-      return NextResponse.json(
-        { error: "Missing code or redirect_uri" },
-        { status: 400 }
-      );
+    if (!code) {
+      return NextResponse.json({ error: "Missing code" }, { status: 400 });
     }
 
-    const clientId = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID;
-    const clientSecret = process.env.GITHUB_CLIENT_SECRET;
-
-    if (!clientId || !clientSecret) {
-      console.error("GitHub OAuth not configured");
-      return NextResponse.json(
-        { error: "GitHub OAuth not configured" },
-        { status: 500 }
-      );
+    if (!CLIENT_ID || !CLIENT_SECRET) {
+      return NextResponse.json({ error: "GitHub OAuth not configured on server." }, { status: 500 });
     }
 
-    // Step 1: Exchange code for access token
+    // Exchange code for access token
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
+      body: JSON.stringify({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
         code,
-        redirect_uri,
-      }).toString(),
+      }),
     });
 
-    if (!tokenRes.ok) {
-      const errorText = await tokenRes.text();
-      console.error("GitHub token exchange failed:", errorText);
-      return NextResponse.json(
-        { error: "GitHub token exchange failed" },
-        { status: 400 }
-      );
-    }
-
     const tokens = await tokenRes.json();
-    const accessToken = tokens.access_token;
 
-    if (!accessToken) {
-      return NextResponse.json(
-        { error: "No access token from GitHub" },
-        { status: 400 }
-      );
+    if (!tokenRes.ok || tokens.error) {
+      console.error("GitHub token error:", tokens);
+      return NextResponse.json({ error: tokens.error_description || "Token exchange failed" }, { status: 400 });
     }
 
-    // Step 2: Fetch user profile
+    // Fetch user profile
     const userRes = await fetch("https://api.github.com/user", {
       headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "DevIQ-Frontend",
+        Authorization: `Bearer ${tokens.access_token}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "DevIQ/1.0",
       },
     });
 
+    const user = await userRes.json();
+
     if (!userRes.ok) {
-      console.error("GitHub profile fetch failed");
-      return NextResponse.json(
-        { error: "Failed to fetch GitHub profile" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Failed to fetch GitHub user info" }, { status: 400 });
     }
 
-    const user = await userRes.json();
+    // GitHub may not expose email publicly — fetch it explicitly
     let email = user.email;
-
-    // GitHub may not return email in user profile; fetch separately
     if (!email) {
-      const emailRes = await fetch("https://api.github.com/user/emails", {
+      const emailsRes = await fetch("https://api.github.com/user/emails", {
         headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "DevIQ-Frontend",
+          Authorization: `Bearer ${tokens.access_token}`,
+          Accept: "application/vnd.github.v3+json",
+          "User-Agent": "DevIQ/1.0",
         },
       });
 
-      if (emailRes.ok) {
-        const emails = await emailRes.json();
-        const primary = emails.find((e: any) => e.primary);
-        const verified = emails.find((e: any) => e.verified);
-        email = primary?.email || verified?.email || emails[0]?.email;
+      if (emailsRes.ok) {
+        const emails: { email: string; primary: boolean; verified: boolean }[] = await emailsRes.json();
+        const primary = emails.find(e => e.primary && e.verified);
+        email = primary?.email ?? emails[0]?.email ?? null;
       }
     }
 
     return NextResponse.json({
-      name: user.name || user.login || "GitHub User",
+      name: user.name,
       email,
       avatar: user.avatar_url,
+      login: user.login,
     });
-  } catch (error) {
-    console.error("GitHub OAuth error:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error("GitHub OAuth API error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
