@@ -87,16 +87,37 @@ export async function exchangeCodeForToken(
   provider: "google" | "github"
 ): Promise<{ token: string; user: AuthUser }> {
   const callbackUrl = getCallbackUrl(provider);
-  
-  const response = await fetch(`${API_BASE}/auth/oauth`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      provider,
-      code,
-      redirect_uri: callbackUrl,
-    }),
-  });
+
+  const endpoint = `${API_BASE}/auth/oauth`;
+  let response: Response | null = null;
+  let lastNetworkError: unknown = null;
+
+  // Retry transient network failures (common on cold starts / flaky mobile networks).
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          code,
+          redirect_uri: callbackUrl,
+        }),
+      });
+      break;
+    } catch (err) {
+      lastNetworkError = err;
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        continue;
+      }
+    }
+  }
+
+  if (!response) {
+    const message = lastNetworkError instanceof Error ? lastNetworkError.message : "Network request failed";
+    throw new Error(`OAuth network error: ${message}`);
+  }
   
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
