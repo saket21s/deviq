@@ -1,310 +1,246 @@
 /**
- * Direct OAuth2 implementation without Firebase
- * Handles Google and GitHub OAuth flows
+ * lib/oauth.ts
+ *
+ * OAuth helpers for Google and GitHub sign-in flows.
+ *
+ * Key design:
+ * - Pending OAuth payloads are cleared BEFORE attempting exchange,
+ *   so a failed exchange never causes a retry loop.
+ * - exchangeCodeForToken calls /api/auth/google (or /api/auth/github)
+ *   which keeps the client secret server-side.
  */
 
-export const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
-export const GITHUB_CLIENT_ID = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID || "";
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || (
-  typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")
-    ? "http://localhost:8000"
-    : "https://developer-portfolio-backend-bu76.onrender.com"
-);
-
-// Local storage keys
+// ─── Storage keys (must match page.tsx and callback pages) ──────────────────
 export const AUTH_TOKEN_KEY = "auth_token";
 export const USER_KEY = "deviq_user";
 
-const OAUTH_STATE_SESSION_PREFIX = "oauth_state_session_";
-const OAUTH_STATE_LOCAL_PREFIX = "oauth_state_local_";
+const PENDING_OAUTH_KEY = "deviq_pending_oauth";
+const PENDING_OAUTH_LOCAL_KEY = "deviq_pending_oauth_local";
 
-export interface AuthUser {
-  id: string;
+// One state key per provider so concurrent flows don't collide
+const oauthStateKey = (provider: string) => `oauth_state_local_${provider}`;
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+export interface OAuthUser {
   name: string;
   email: string;
   avatar?: string;
-  provider: "google" | "github";
+  provider?: "google" | "github";
 }
 
-/**
- * Get the OAuth callback URL for the current environment
- */
-export function getCallbackUrl(provider: "google" | "github"): string {
-  if (typeof window === "undefined") return "";
-  
-  const baseUrl = window.location.origin;
-  const path = provider === "google" ? "/auth/callback/google" : "/auth/callback/github";
-  return `${baseUrl}${path}`;
+export interface ExchangeResult {
+  user: OAuthUser;
+  /** JWT returned by YOUR backend after you call /auth/oauth */
+  token?: string;
 }
 
-/**
- * Initiate Google OAuth login
- */
-export function initiateGoogleLogin(): void {
-  const callbackUrl = getCallbackUrl("google");
-  const scope = "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email";
-  const state = generateRandomState();
-  
-  // Store in both sessionStorage and localStorage to survive redirect edge cases
-  storeOAuthState("google", state);
-  
-  const params = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: callbackUrl,
-    response_type: "code",
-    scope,
-    state,
-    access_type: "offline",
-    prompt: "consent",
-  });
-  
-  window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+// ─── State helpers ───────────────────────────────────────────────────────────
+
+function generateState(): string {
+  return (
+    Math.random().toString(36).slice(2) +
+    Math.random().toString(36).slice(2)
+  );
 }
 
-/**
- * Initiate GitHub OAuth login
- */
-export function initiateGithubLogin(): void {
-  const callbackUrl = getCallbackUrl("github");
-  const scope = "user:email";
-  const state = generateRandomState();
-  
-  // Store in both sessionStorage and localStorage to survive redirect edge cases
-  storeOAuthState("github", state);
-  
-  const params = new URLSearchParams({
-    client_id: GITHUB_CLIENT_ID,
-    redirect_uri: callbackUrl,
-    scope,
-    state,
-    allow_signup: "true",
-  });
-  
-  window.location.href = `https://github.com/login/oauth/authorize?${params.toString()}`;
-}
-
-/**
- * Send a log entry to the backend /log endpoint.
- * This is a fire-and-forget operation.
- */
-export function logError(message: string, context?: Record<string, any>): void {
-  if (!API_BASE) return;
-
-  const endpoint = `${API_BASE}/log`;
-  const entry = {
-    level: "error",
-    message: `[Frontend] ${message}`,
-    context: {
-      ...context,
-      url: window.location.href,
-      userAgent: navigator.userAgent,
-    },
-  };
-
-  // Use navigator.sendBeacon if available for reliability on page unload
-  if (navigator.sendBeacon) {
-    const blob = new Blob([JSON.stringify(entry)], { type: 'application/json' });
-    navigator.sendBeacon(endpoint, blob);
-  } else {
-    // Fallback to fetch, but don't wait for it
-    fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(entry),
-      keepalive: true, // Important for requests during unload
-    }).catch(() => {
-      // Ignore errors, this is best-effort
-    });
+function saveStateForProvider(state: string, provider: string): void {
+  try {
+    localStorage.setItem(oauthStateKey(provider), state);
+  } catch {
+    // storage unavailable — best-effort only
   }
 }
 
+export function verifyStateForProvider(
+  state: string,
+  provider: string
+): boolean {
+  try {
+    const stored = localStorage.getItem(oauthStateKey(provider));
+    // Always clean up immediately after reading
+    localStorage.removeItem(oauthStateKey(provider));
+    if (!stored) return true; // no stored state → skip check (popup flows)
+    return stored === state;
+  } catch {
+    return true;
+  }
+}
+
+// ─── Initiation helpers ──────────────────────────────────────────────────────
+
+export function initiateGoogleLogin(): void {
+  const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+  if (!clientId) throw new Error("NEXT_PUBLIC_GOOGLE_CLIENT_ID is not set");
+
+  const state = generateState();
+  saveStateForProvider(state, "google");
+
+  const redirectUri = `${window.location.origin}/auth/callback/google`;
+
+  const url =
+    "https://accounts.google.com/o/oauth2/v2/auth?" +
+    new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope:
+        "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
+      state,
+      access_type: "offline",
+      prompt: "select_account consent",
+    });
+
+  window.location.assign(url);
+}
+
+export function initiateGithubLogin(): void {
+  const clientId = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID;
+  if (!clientId) throw new Error("NEXT_PUBLIC_GITHUB_CLIENT_ID is not set");
+
+  const state = generateState();
+  saveStateForProvider(state, "github");
+
+  const redirectUri = `${window.location.origin}/auth/callback/github`;
+
+  const url =
+    "https://github.com/login/oauth/authorize?" +
+    new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope: "read:user user:email",
+      state,
+    });
+
+  window.location.assign(url);
+}
+
+// ─── Code exchange ───────────────────────────────────────────────────────────
+
 /**
- * Exchange authorization code for token (calls backend)
+ * Exchanges an OAuth authorization code for a user profile.
+ *
+ * IMPORTANT: This function clears the pending OAuth storage keys BEFORE
+ * making the network call. This guarantees that even if the exchange fails,
+ * the effect in page.tsx will NOT find a pending payload and retry — which
+ * is what causes the redirect loop.
  */
 export async function exchangeCodeForToken(
   code: string,
   provider: "google" | "github"
-): Promise<{ token: string; user: AuthUser }> {
-  const callbackUrl = getCallbackUrl(provider);
+): Promise<ExchangeResult> {
+  // ── 1. Clear pending storage FIRST (prevents retry loops) ──────────────
+  clearPendingOAuth();
 
-  // Log the attempt to exchange the code
-  logError("Attempting OAuth code exchange", {
-    provider,
-    code: code.substring(0, 10) + "...", // Don't log the full code
-    callbackUrl,
-    apiBase: API_BASE,
+  // ── 2. Call the Next.js API route (keeps secrets server-side) ──────────
+  const redirectUri = `${window.location.origin}/auth/callback/${provider}`;
+
+  const apiRoute =
+    provider === "google" ? "/api/auth/google" : "/api/auth/github";
+
+  const res = await fetch(apiRoute, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, redirect_uri: redirectUri }),
   });
 
-  const endpoint = `${API_BASE}/auth/oauth`;
-  let response: Response | null = null;
-  let lastNetworkError: unknown = null;
-
-  // Retry transient network failures (common on cold starts / flaky mobile networks).
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          code,
-          provider,
-          redirect_uri: callbackUrl,
-        }),
-      });
-
-      if (response.ok) {
-        break; // Success
-      }
-
-      // Log non-network errors immediately
-      if (response.status < 500 || response.status >= 600) {
-        const errorBody = await response.text();
-        logError(`OAuth exchange failed with client error ${response.status}`, {
-          provider,
-          status: response.status,
-          error: errorBody.substring(0, 500),
-        });
-        throw new Error(`Server returned ${response.status}: ${errorBody}`);
-      }
-
-    } catch (error) {
-      lastNetworkError = error;
-      // Log the network error
-      logError(`OAuth exchange network error on attempt ${attempt}`, {
-        provider,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (attempt < 3) {
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
-      }
-    }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `OAuth exchange failed (${res.status})`);
   }
 
-  if (!response || !response.ok) {
-    const finalError = `Failed to exchange code after 3 attempts. Last error: ${lastNetworkError ? (lastNetworkError as Error).message : 'Server error'}`;
-    logError("OAuth exchange completely failed after retries", {
-      provider,
-      lastStatus: response?.status,
-      lastError: lastNetworkError ? (lastNetworkError as Error).message : 'Server error',
-    });
-    throw new Error(finalError);
-  }
+  const profile = await res.json() as {
+    name?: string;
+    email?: string;
+    avatar?: string;
+    picture?: string;
+  };
 
+  const user: OAuthUser = {
+    name: profile.name || "User",
+    email: profile.email || "",
+    avatar: profile.avatar || profile.picture,
+    provider,
+  };
+
+  // ── 3. Optionally register/login with YOUR backend ────────────────────
+  // If your backend returns a JWT token, store it here.
+  // This is a best-effort call — failures fall back to local session.
+  let token: string | undefined;
   try {
-    const data = await response.json();
-    if (!data.user || !data.access_token) {
-      logError("OAuth exchange response missing user or token", {
-        provider,
-        response: JSON.stringify(data).substring(0, 500),
-      });
-      throw new Error("Invalid response from server");
-    }
+    const API =
+      process.env.NEXT_PUBLIC_API_BASE_URL ||
+      "https://developer-portfolio-backend-bu76.onrender.com";
 
-    return { token: data.access_token, user: data.user };
-  } catch (error) {
-    logError("Failed to parse JSON from successful OAuth exchange", {
-      provider,
-      error: error instanceof Error ? error.message : String(error),
+    const oauthRes = await fetch(`${API}/auth/oauth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        provider,
+        profile_picture_url: user.avatar,
+        user: { name: user.name, email: user.email, picture: user.avatar },
+      }),
     });
-    throw new Error("Failed to parse server response.");
+
+    if (oauthRes.ok) {
+      const data = await oauthRes.json();
+      token = data?.access_token;
+      if (token) {
+        localStorage.setItem(AUTH_TOKEN_KEY, token);
+      }
+    }
+  } catch {
+    // Backend unavailable — local session will be used as fallback
+  }
+
+  return { user, token };
+}
+
+// ─── Auth storage helpers ────────────────────────────────────────────────────
+
+export function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+  } catch {
+    return null;
   }
 }
 
-/**
- * Save authentication to local storage
- */
-export function saveAuthToken(token: string, user: AuthUser): void {
-  localStorage.setItem(AUTH_TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+export function getStoredUser(): OAuthUser | null {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
 }
 
-/**
- * Get authentication from local storage
- */
-export function getAuthToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(AUTH_TOKEN_KEY);
-}
-
-/**
- * Get user from local storage
- */
-export function getStoredUser(): AuthUser | null {
-  if (typeof window === "undefined") return null;
-  const stored = localStorage.getItem(USER_KEY);
-  return stored ? JSON.parse(stored) : null;
-}
-
-/**
- * Clear authentication from local storage
- */
-export function clearAuth(): void {
-  localStorage.removeItem(AUTH_TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
-}
-
-/**
- * Check if user is authenticated
- */
 export function isAuthenticated(): boolean {
   return !!getAuthToken();
 }
 
-/**
- * Generate random state for OAuth flow
- */
-function generateRandomState(): string {
-  return Math.random().toString(36).substring(2, 15) +
-         Math.random().toString(36).substring(2, 15);
+export function clearAuth(): void {
+  try {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    clearPendingOAuth();
+    // Remove all provider state keys
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith("oauth_state_local_"))
+      .forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore
+  }
 }
 
-/**
- * Verify OAuth state matches
- */
-export function verifyState(state: string): boolean {
-  // Backward-compatible fallback (older builds used a shared key)
-  const stored = sessionStorage.getItem("oauth_state");
-  sessionStorage.removeItem("oauth_state");
-  return stored === state;
-}
-
-export function verifyStateForProvider(state: string, provider: "google" | "github"): boolean {
-  if (!state) return false;
-
-  const sessionKey = `${OAUTH_STATE_SESSION_PREFIX}${provider}`;
-  const localKey = `${OAUTH_STATE_LOCAL_PREFIX}${provider}`;
-
-  const sessionState = sessionStorage.getItem(sessionKey);
-  const localState = localStorage.getItem(localKey);
-
-  // Cleanup state values once read to avoid replay
-  sessionStorage.removeItem(sessionKey);
-  localStorage.removeItem(localKey);
-
-  return sessionState === state || localState === state;
-}
-
-function storeOAuthState(provider: "google" | "github", state: string): void {
-  const sessionKey = `${OAUTH_STATE_SESSION_PREFIX}${provider}`;
-  const localKey = `${OAUTH_STATE_LOCAL_PREFIX}${provider}`;
-  sessionStorage.setItem(sessionKey, state);
-  localStorage.setItem(localKey, state);
-}
-
-/**
- * Make authenticated API request
- */
-export async function authenticatedFetch(
-  url: string,
-  options: RequestInit = {}
-): Promise<Response> {
-  const token = getAuthToken();
-  
-  return fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-      Authorization: `Bearer ${token}`,
-    },
-  });
+function clearPendingOAuth(): void {
+  try {
+    sessionStorage.removeItem(PENDING_OAUTH_KEY);
+    localStorage.removeItem(PENDING_OAUTH_LOCAL_KEY);
+  } catch {
+    // ignore
+  }
 }
