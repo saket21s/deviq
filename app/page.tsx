@@ -15,6 +15,8 @@ import {
 import { 
   initiateGoogleLogin, 
   initiateGithubLogin,
+  exchangeCodeForToken,
+  verifyStateForProvider,
   getStoredUser,
   getAuthToken,
   clearAuth,
@@ -1105,21 +1107,56 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
   const heatColors = dark ? ["#1a1a1a", "#0d3320", "#155230", "#1e7a47", "#26a35e"] : ["#EBEBEB", "#BBF7D0", "#6EE7A0", "#22C55E", "#15803D"];
   useEffect(() => {
     if (!username) return;
-    setLoading(true);
-    setHdata(null);
-    
-    const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
-    fetch(`${API}/contributions/${username}`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) throw new Error(data.error);
-        setHdata(data);
-        setLoading(false);
-      })
-      .catch(e => {
-        setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: String(e) });
-        setLoading(false);
-      });
+    let cancelled = false;
+
+    const loadContributions = async () => {
+      setLoading(true);
+      setHdata(null);
+
+      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
+
+      try {
+        const r = await fetch(`${API}/contributions/${encodeURIComponent(username)}`, { credentials: 'include' });
+        const body = await r.json().catch(() => null);
+
+        if (!r.ok) {
+          const detail = body?.detail || body?.error || `HTTP ${r.status}`;
+          throw new Error(detail);
+        }
+
+        if (!body?.contributions || !Array.isArray(body.contributions)) {
+          throw new Error('Contribution data unavailable from backend');
+        }
+
+        if (!cancelled) setHdata(body as HeatmapData);
+      } catch (backendErr: unknown) {
+        const githubToken = process.env.NEXT_PUBLIC_GITHUB_TOKEN || "";
+
+        if (githubToken) {
+          try {
+            const fallback = await fetchHeatmap(username, githubToken);
+            if (!cancelled) setHdata(fallback);
+            return;
+          } catch (fallbackErr: unknown) {
+            const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+            if (!cancelled) {
+              setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: msg });
+            }
+            return;
+          }
+        }
+
+        const msg = backendErr instanceof Error ? backendErr.message : String(backendErr);
+        if (!cancelled) {
+          setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: msg });
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+
+    loadContributions();
+    return () => { cancelled = true; };
   }, [username]);
   const CELL = 11, GAP = 2, TOTAL = CELL + GAP;
   const { weeks, monthLabels } = hdata?.contributions?.length ? buildGrid(hdata.contributions) : { weeks: [], monthLabels: [] };
@@ -4314,16 +4351,40 @@ export default function Page() {
 
   useEffect(() => {
     const init = async () => {
+      const pathPage = window.location.pathname.replace(/^\/|\/$/, "") as Page;
+      const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following", "chat", "practice"];
+      const initialPage = validPages.includes(pathPage) ? pathPage : "home";
+      setPage(initialPage);
+      window.history.replaceState({ page: initialPage }, "", initialPage === "home" ? "/" : `/${initialPage}`);
+
       try {
         const storedDark = localStorage.getItem("deviq_dark");
         if (storedDark !== null) setDark(storedDark === "1");
         else setDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
 
+        // Do not block initial paint on remote auth/profile calls.
+        setHydrated(true);
+
         // Try server session only when we have local auth context.
         // This avoids expected 401 noise for first-time unauthenticated visitors.
         const savedUser = loadSession();
+        if (savedUser) {
+          setUser(savedUser);
+          const p = loadProfile(savedUser.email);
+          if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+          saveProfile(savedUser.email, p);
+          setProfile(p);
+        }
+
+        const withTimeout = async <T,>(promise: Promise<T>, ms = 6000): Promise<T> => {
+          return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => setTimeout(() => reject(new Error("INIT_TIMEOUT")), ms)),
+          ]);
+        };
+
         const hasLocalToken = !!localStorage.getItem("auth_token");
-        const serverUser = hasLocalToken ? await apiFetchSession() : null;
+        const serverUser = hasLocalToken ? await withTimeout(apiFetchSession()).catch(() => null) : null;
         if (serverUser) {
           const mergedUser = enrichAuthUser(serverUser);
           setUser(mergedUser);
@@ -4363,24 +4424,16 @@ export default function Page() {
             }
           }
         } else {
-          // fallback to local storage
-          if (savedUser) {
-            setUser(savedUser);
-            const p = loadProfile(savedUser.email);
-            if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-            saveProfile(savedUser.email, p); setProfile(p);
-
-            // Best effort: silently restore backend cookie session for Google users.
-            if (savedUser.provider === "google") {
-              apiGmailLogin({ name: savedUser.name, email: savedUser.email, avatar: savedUser.avatar })
-                .then((restored) => {
-                  if (!restored) return;
-                  const merged = enrichAuthUser(restored);
-                  setUser(merged);
-                  cacheAuthUser(merged);
-                })
-                .catch(() => {});
-            }
+          // fallback to local storage and best-effort cookie restoration
+          if (savedUser?.provider === "google") {
+            apiGmailLogin({ name: savedUser.name, email: savedUser.email, avatar: savedUser.avatar })
+              .then((restored) => {
+                if (!restored) return;
+                const merged = enrichAuthUser(restored);
+                setUser(merged);
+                cacheAuthUser(merged);
+              })
+              .catch(() => {});
           }
         }
       } catch {
@@ -4397,12 +4450,6 @@ export default function Page() {
           console.log('❌ NOT LOGGED IN - Please click "Sign In" to authenticate');
         }
       }, 1000);
-      
-      const pathPage = window.location.pathname.replace(/^\/|\/$/, "") as Page;
-      const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following", "chat", "practice"];
-      const initialPage = validPages.includes(pathPage) ? pathPage : "home";
-      setPage(initialPage);
-      window.history.replaceState({ page: initialPage }, "", initialPage === "home" ? "/" : `/${initialPage}`);
     };
     init();
   }, []);
@@ -4523,22 +4570,72 @@ export default function Page() {
     }
     setAuthModal(null); setMenuOpen(false);
   };
-  const handleLogout = async () => { 
-    // Sync profile to cloud before logging out
-    if (user && profile) {
+
+  useEffect(() => {
+    const PENDING_OAUTH_KEY = "deviq_pending_oauth";
+    const raw = sessionStorage.getItem(PENDING_OAUTH_KEY);
+    if (!raw) return;
+
+    sessionStorage.removeItem(PENDING_OAUTH_KEY);
+
+    const run = async () => {
       try {
-        console.log('💾 Syncing profile before logout...');
-        await syncProfile(user.email, profile).catch(() => {
-          console.log('⚠️  Profile sync failed, but continuing with logout');
-        });
-      } catch {
-        console.error('Error during logout sync');
+        const pending = JSON.parse(raw) as {
+          provider?: "google" | "github";
+          code?: string;
+          state?: string;
+          createdAt?: number;
+        };
+
+        const provider = pending.provider;
+        const code = pending.code;
+        const state = pending.state || "";
+
+        if (!provider || !code) return;
+
+        // Avoid replaying stale auth callbacks.
+        if (pending.createdAt && Date.now() - pending.createdAt > 5 * 60 * 1000) {
+          throw new Error("OAuth callback expired. Please sign in again.");
+        }
+
+        if (!verifyStateForProvider(state, provider)) {
+          throw new Error("Invalid OAuth state. Please retry sign-in.");
+        }
+
+        const { token, user: oauthUser } = await exchangeCodeForToken(code, provider);
+        localStorage.setItem(AUTH_TOKEN_KEY, token);
+
+        const normalized = coerceAuthUser(oauthUser, { provider });
+        await handleLogin(normalized);
+      } catch (err) {
+        console.error("Deferred OAuth completion failed:", err);
       }
-    }
-    await apiLogout().catch(() => {});
+    };
+
+    run();
+  }, [handleLogin]);
+
+  const handleLogout = async () => {
+    const userToSync = user;
+    const profileToSync = profile;
+
+    // Always clear local session immediately so sign-out is responsive.
     clearAuth();
     clearSession();
-    setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home");
+    setUser(null);
+    setProfile(null);
+    setMenuOpen(false);
+    setUserMenuOpen(false);
+    window.history.replaceState({ page: "home" }, "", "");
+    setPage("home");
+
+    // Best-effort background sync + server logout; never block the UI.
+    if (userToSync && profileToSync) {
+      syncProfile(userToSync.email, profileToSync)
+        .then(() => console.log('💾 Profile synced before logout'))
+        .catch(() => console.log('⚠️  Profile sync failed during logout'));
+    }
+    apiLogout().catch(() => {});
   };
   const handleProfileSave = async (updated: UserProfile) => {
     if (!user) return;
