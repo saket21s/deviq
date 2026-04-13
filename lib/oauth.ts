@@ -35,7 +35,7 @@ export function getCallbackUrl(provider: "google" | "github"): string {
  */
 export function initiateGoogleLogin(): void {
   const callbackUrl = getCallbackUrl("google");
-  const scope = encodeURIComponent("openid profile email");
+  const scope = encodeURIComponent("https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email");
   const state = generateRandomState();
   
   // Store state in sessionStorage for verification
