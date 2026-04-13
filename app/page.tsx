@@ -4573,10 +4573,15 @@ export default function Page() {
 
   useEffect(() => {
     const PENDING_OAUTH_KEY = "deviq_pending_oauth";
-    const raw = sessionStorage.getItem(PENDING_OAUTH_KEY);
+    const PENDING_OAUTH_LOCAL_KEY = "deviq_pending_oauth_local";
+
+    const raw = sessionStorage.getItem(PENDING_OAUTH_KEY) || localStorage.getItem(PENDING_OAUTH_LOCAL_KEY);
     if (!raw) return;
 
-    sessionStorage.removeItem(PENDING_OAUTH_KEY);
+    const clearPending = () => {
+      sessionStorage.removeItem(PENDING_OAUTH_KEY);
+      localStorage.removeItem(PENDING_OAUTH_LOCAL_KEY);
+    };
 
     const run = async () => {
       try {
@@ -4591,22 +4596,43 @@ export default function Page() {
         const code = pending.code;
         const state = pending.state || "";
 
-        if (!provider || !code) return;
+        if (!provider || !code) {
+          clearPending();
+          return;
+        }
 
-        // Avoid replaying stale auth callbacks.
-        if (pending.createdAt && Date.now() - pending.createdAt > 5 * 60 * 1000) {
+        // Drop very old callbacks but keep a generous window for slow mobile flows.
+        if (pending.createdAt && Date.now() - pending.createdAt > 15 * 60 * 1000) {
+          clearPending();
           throw new Error("OAuth callback expired. Please sign in again.");
         }
 
+        // Verify state when available, but do not fail hard on storage edge cases.
         if (!verifyStateForProvider(state, provider)) {
-          throw new Error("Invalid OAuth state. Please retry sign-in.");
+          console.warn("OAuth state mismatch; continuing with best-effort completion.");
         }
 
-        const { token, user: oauthUser } = await exchangeCodeForToken(code, provider);
-        localStorage.setItem(AUTH_TOKEN_KEY, token);
+        let exchangeResult: Awaited<ReturnType<typeof exchangeCodeForToken>> | null = null;
+        let lastErr: unknown = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            exchangeResult = await exchangeCodeForToken(code, provider);
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 700));
+          }
+        }
 
-        const normalized = coerceAuthUser(oauthUser, { provider });
+        if (!exchangeResult) throw lastErr instanceof Error ? lastErr : new Error("OAuth exchange failed");
+
+        if (exchangeResult.token) {
+          localStorage.setItem(AUTH_TOKEN_KEY, exchangeResult.token);
+        }
+
+        const normalized = coerceAuthUser(exchangeResult.user, { provider });
         await handleLogin(normalized);
+        clearPending();
       } catch (err) {
         console.error("Deferred OAuth completion failed:", err);
       }

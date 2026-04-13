@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 const PENDING_OAUTH_KEY = "deviq_pending_oauth";
+const PENDING_OAUTH_LOCAL_KEY = "deviq_pending_oauth_local";
 
 function GoogleCallbackContent() {
   const searchParams = useSearchParams();
@@ -15,12 +16,14 @@ function GoogleCallbackContent() {
     const state = searchParams.get("state");
 
     if (code) {
-      sessionStorage.setItem(PENDING_OAUTH_KEY, JSON.stringify({
+      const payload = JSON.stringify({
         provider: "google",
         code,
         state,
         createdAt: Date.now(),
-      }));
+      });
+      sessionStorage.setItem(PENDING_OAUTH_KEY, payload);
+      localStorage.setItem(PENDING_OAUTH_LOCAL_KEY, payload);
     }
 
     // Redirect immediately so users do not wait on this page.
