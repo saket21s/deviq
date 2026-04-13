@@ -619,6 +619,12 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
     analysesRun: 0,
     comparisonsRun: 0,
     aiInsightsRun: 0,
+    recentAnalyses: [],
+    following: [],
+    followers: [],
+    notifications: [],
+    solvedProblems: [],
+    weakCategories: [],
   };
 
   return {

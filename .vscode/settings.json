@@ -1,5 +1,17 @@
 {
     "chat.tools.terminal.autoApprove": {
-        "git push": true
+        "git push": true,
+        "/^python3 << 'EOF'\nimport requests\n\n# Try a simpler query to get companies\ngraphql_query = \"\"\"\n\\{\n  companies \\{\n    slug\n    id\n    name\n  \\}\n\\}\n\"\"\"\n\ntry:\n    response = requests\\.post\\(\n        \"https://leetcode\\.com/graphql\",\n        json=\\{\"query\": graphql_query\\},\n        headers=\\{\n            \"Content-Type\": \"application/json\",\n            \"User-Agent\": \"Mozilla/5\\.0\"\n        \\},\n        timeout=10\n    \\)\n    \n    data = response\\.json\\(\\)\n    print\\(\"Status:\", response\\.status_code\\)\n    \n    if \"errors\" in data:\n        print\\(\"Errors:\", data\\[\"errors\"\\]\\)\n    elif \"data\" in data:\n        companies = data\\[\"data\"\\]\\.get\\(\"companies\", \\[\\]\\)\n        print\\(f\"Found \\{len\\(companies\\)\\} companies:\"\\)\n        for c in companies\\[:10\\]:\n            print\\(f\"  - \\{c\\}\"\\)\n    else:\n        print\\(\"Response:\", data\\)\n        \nexcept Exception as e:\n    print\\(f\"Error: \\{e\\}\"\\)\nEOF\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python3 << 'EOF'\nimport requests\n\n# Try searching for companies\ngraphql_query = \"\"\"\n\\{\n  companies\\(search: \"google\"\\) \\{\n    slug\n    id\n    name\n  \\}\n\\}\n\"\"\"\n\ntry:\n    response = requests\\.post\\(\n        \"https://leetcode\\.com/graphql\",\n        json=\\{\"query\": graphql_query\\},\n        headers=\\{\n            \"Content-Type\": \"application/json\",\n            \"User-Agent\": \"Mozilla/5\\.0\"\n        \\},\n        timeout=10\n    \\)\n    \n    data = response\\.json\\(\\)\n    print\\(\"Status:\", response\\.status_code\\)\n    \n    if \"errors\" in data:\n        print\\(\"Errors:\", data\\[\"errors\"\\]\\)\n    elif \"data\" in data:\n        companies = data\\[\"data\"\\]\\.get\\(\"companies\", \\[\\]\\)\n        print\\(f\"Found \\{len\\(companies\\)\\} companies:\"\\)\n        for c in companies:\n            print\\(f\"  - \\{c\\}\"\\)\n    else:\n        print\\(\"Response:\", data\\)\n        \nexcept Exception as e:\n    print\\(f\"Error: \\{e\\}\"\\)\nEOF\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^python3 << 'EOF'\nimport requests, json\n\n# Try fetching a company with all available fields\ngraphql_query = \"\"\"\n\\{\n  companies\\(search: \"google\"\\) \\{\n    slug\n    id\n    name\n    tagCount \\{\n      company_slug\n      tag_slug\n      count\n    \\}\n  \\}\n\\}\n\"\"\"\n\ntry:\n    response = requests\\.post\\(\n        \"https://leetcode\\.com/graphql\",\n        json=\\{\"query\": graphql_query\\},\n        headers=\\{\n            \"Content-Type\": \"application/json\",\n            \"User-Agent\": \"Mozilla/5\\.0\"\n        \\},\n        timeout=10\n    \\)\n    \n    data = response\\.json\\(\\)\n    print\\(\"Status:\", response\\.status_code\\)\n    \n    if \"errors\" in data:\n        print\\(\"Errors:\", json\\.dumps\\(data\\[\"errors\"\\], indent=2\\)\\)\n    elif \"data\" in data:\n        print\\(\"Success!\"\\)\n        print\\(json\\.dumps\\(data\\[\"data\"\\], indent=2\\)\\)\n    else:\n        print\\(\"Response:\", data\\)\n        \nexcept Exception as e:\n    print\\(f\"Error: \\{e\\}\"\\)\nEOF\n$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
     }
 }
