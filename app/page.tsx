@@ -202,7 +202,15 @@ function findUser(email: string, password: string): StoredUser | null { return g
 function emailExists(email: string): boolean { return getUsers().some(u => u.email.toLowerCase() === email.toLowerCase()); }
 function saveSession(u: AuthUser) { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); }
 function loadSession(): AuthUser | null { try { const s = localStorage.getItem(SESSION_KEY); return s ? JSON.parse(s) : null; } catch { return null; } }
-function clearSession() { localStorage.removeItem(SESSION_KEY); }
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem("auth_token");
+  localStorage.removeItem(USER_KEY);
+  // Remove provider-scoped OAuth transient state keys.
+  Object.keys(localStorage)
+    .filter((k) => k.startsWith("oauth_state_local_"))
+    .forEach((k) => localStorage.removeItem(k));
+}
 function loadProfile(email: string): UserProfile {
   try {
     const raw = localStorage.getItem(`${PROFILE_KEY}_${email}`);
@@ -4528,6 +4536,7 @@ export default function Page() {
       }
     }
     await apiLogout().catch(() => {});
+    clearAuth();
     clearSession();
     setUser(null); setProfile(null); setMenuOpen(false); setUserMenuOpen(false); window.history.replaceState({ page: "home" }, "", ""); setPage("home");
   };
