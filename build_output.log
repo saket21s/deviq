@@ -6,3 +6,22 @@
    - Environments: .env.local, .env
 
    Creating an optimized production build ...
+ ✓ Compiled successfully in 18.4s
+   Skipping linting
+   Checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/7) ...
+ ⨯ useSearchParams() should be wrapped in a suspense boundary at page "/auth/callback/github". Read more: https://nextjs.org/docs/messages/missing-suspense-with-csr-bailout
+    at g (/home/saket/Desktop/deviq-main/.next/server/chunks/71.js:9:61914)
+    at m (/home/saket/Desktop/deviq-main/.next/server/chunks/71.js:1:38441)
+    at g (/home/saket/Desktop/deviq-main/.next/server/app/auth/callback/github/page.js:1:2103)
+    at n3 (/home/saket/Desktop/deviq-main/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:82831)
+    at n6 (/home/saket/Desktop/deviq-main/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:84601)
+    at n5 (/home/saket/Desktop/deviq-main/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:104801)
+    at n7 (/home/saket/Desktop/deviq-main/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:102219)
+    at n8 (/home/saket/Desktop/deviq-main/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:83183)
+    at n6 (/home/saket/Desktop/deviq-main/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:84647)
+    at n6 (/home/saket/Desktop/deviq-main/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:2:101560)
+Error occurred prerendering page "/auth/callback/github". Read more: https://nextjs.org/docs/messages/prerender-error
+Export encountered an error on /auth/callback/github/page: /auth/callback/github, exiting the build.
+ ⨯ Next.js build worker exited with code: 1 and signal: null
