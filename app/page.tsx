@@ -230,6 +230,13 @@ function loadProfile(email: string): UserProfile {
     analysesRun: 0,
     comparisonsRun: 0,
     aiInsightsRun: 0,
+    recentAnalyses: [],
+    following: [],
+    followers: [],
+    notifications: [],
+    solvedProblems: [],
+    weakCategories: [],
+    companyTracking: {},
   };
 }
 function saveProfile(email: string, p: UserProfile) {
