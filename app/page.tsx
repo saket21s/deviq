@@ -12,7 +12,16 @@ import {
   Legend,
   Filler,
 } from "chart.js";
-import { signInWithGoogle, signInWithGitHub } from "@/lib/firebaseAuth";
+import { 
+  initiateGoogleLogin, 
+  initiateGithubLogin,
+  getStoredUser,
+  getAuthToken,
+  clearAuth,
+  isAuthenticated,
+  AUTH_TOKEN_KEY,
+  USER_KEY
+} from "@/lib/oauth";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -1656,48 +1665,24 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
     return () => {};
   }, [onAuth]);
 
-  const handleSocialAuth = useCallback(async (provider: "google" | "github") => {
+  const handleSocialAuth = useCallback((provider: "google" | "github") => {
     setGlobalError("");
     setOauthLoading(provider);
     try {
-      let authUser;
+      // Redirect-based OAuth flow (no popup)
       if (provider === "google") {
-        authUser = await signInWithGoogle();
+        initiateGoogleLogin();
       } else {
-        authUser = await signInWithGitHub();
+        initiateGithubLogin();
       }
-      
-      // Successfully authenticated with Firebase
-      setSuccess(true);
-      setOauthLoading(null);
-      setTimeout(() => onAuth({
-        name: authUser.name,
-        email: authUser.email,
-        avatar: authUser.avatar,
-        provider: authUser.provider as any,
-      }), 500);
+      // User will be redirected, so no need for further handling here
     } catch (err: any) {
       console.error(`${provider} auth error:`, err);
-      
-      // Provide more helpful error messages
-      let errorMessage = `${provider === "google" ? "Google" : "GitHub"} authentication failed.`;
-      
-      if (err.code === 'auth/configuration-not-found') {
-        errorMessage = `${provider === "google" ? "Google" : "GitHub"} OAuth is not enabled in Firebase Console. Please check FIREBASE_AUTH_SETUP.md`;
-      } else if (err.code === 'auth/popup-blocked') {
-        errorMessage = 'Popup was blocked. Please allow popups for this site.';
-      } else if (err.code === 'auth/cancelled-popup-request') {
-        errorMessage = 'Sign-in was cancelled.';
-      } else if (err.code === 'auth/operation-not-supported-in-this-environment') {
-        errorMessage = 'Authentication not supported in this environment. Make sure you\'re using a browser.';
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      
-      setGlobalError(errorMessage);
+      setGlobalError(`${provider === "google" ? "Google" : "GitHub"} authentication failed.`);
       setOauthLoading(null);
     }
-  }, [onAuth]);
+  }, []);
+
 
   const handleSubmit = () => {
     const allFields: Record<string, boolean> = isLogin ? { email: true, password: true } : { name: true, email: true, password: true, confirm: true };
