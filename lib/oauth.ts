@@ -84,6 +84,41 @@ export function initiateGithubLogin(): void {
 }
 
 /**
+ * Send a log entry to the backend /log endpoint.
+ * This is a fire-and-forget operation.
+ */
+export function logError(message: string, context?: Record<string, any>): void {
+  if (!API_BASE) return;
+
+  const endpoint = `${API_BASE}/log`;
+  const entry = {
+    level: "error",
+    message: `[Frontend] ${message}`,
+    context: {
+      ...context,
+      url: window.location.href,
+      userAgent: navigator.userAgent,
+    },
+  };
+
+  // Use navigator.sendBeacon if available for reliability on page unload
+  if (navigator.sendBeacon) {
+    const blob = new Blob([JSON.stringify(entry)], { type: 'application/json' });
+    navigator.sendBeacon(endpoint, blob);
+  } else {
+    // Fallback to fetch, but don't wait for it
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+      keepalive: true, // Important for requests during unload
+    }).catch(() => {
+      // Ignore errors, this is best-effort
+    });
+  }
+}
+
+/**
  * Exchange authorization code for token (calls backend)
  */
 export async function exchangeCodeForToken(
@@ -91,6 +126,14 @@ export async function exchangeCodeForToken(
   provider: "google" | "github"
 ): Promise<{ token: string; user: AuthUser }> {
   const callbackUrl = getCallbackUrl(provider);
+
+  // Log the attempt to exchange the code
+  logError("Attempting OAuth code exchange", {
+    provider,
+    code: code.substring(0, 10) + "...", // Don't log the full code
+    callbackUrl,
+    apiBase: API_BASE,
+  });
 
   const endpoint = `${API_BASE}/auth/oauth`;
   let response: Response | null = null;
@@ -103,44 +146,68 @@ export async function exchangeCodeForToken(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider,
           code,
+          provider,
           redirect_uri: callbackUrl,
         }),
       });
-      break;
-    } catch (err) {
-      lastNetworkError = err;
+
+      if (response.ok) {
+        break; // Success
+      }
+
+      // Log non-network errors immediately
+      if (response.status < 500 || response.status >= 600) {
+        const errorBody = await response.text();
+        logError(`OAuth exchange failed with client error ${response.status}`, {
+          provider,
+          status: response.status,
+          error: errorBody.substring(0, 500),
+        });
+        throw new Error(`Server returned ${response.status}: ${errorBody}`);
+      }
+
+    } catch (error) {
+      lastNetworkError = error;
+      // Log the network error
+      logError(`OAuth exchange network error on attempt ${attempt}`, {
+        provider,
+        error: error instanceof Error ? error.message : String(error),
+      });
       if (attempt < 3) {
-        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-        continue;
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
       }
     }
   }
 
-  if (!response) {
-    const message = lastNetworkError instanceof Error ? lastNetworkError.message : "Network request failed";
-    throw new Error(`OAuth network error: ${message}`);
-  }
-  
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `OAuth exchange failed: ${response.statusText}`);
-  }
-  
-  const data = await response.json();
-  const userInfo = data.user || {};
-  
-  return {
-    token: data.access_token,
-    user: {
-      id: userInfo.id || userInfo.email,
-      name: userInfo.name || userInfo.username,
-      email: userInfo.email,
-      avatar: userInfo.profile_picture_url || userInfo.picture || userInfo.avatar,
+  if (!response || !response.ok) {
+    const finalError = `Failed to exchange code after 3 attempts. Last error: ${lastNetworkError ? (lastNetworkError as Error).message : 'Server error'}`;
+    logError("OAuth exchange completely failed after retries", {
       provider,
-    },
-  };
+      lastStatus: response?.status,
+      lastError: lastNetworkError ? (lastNetworkError as Error).message : 'Server error',
+    });
+    throw new Error(finalError);
+  }
+
+  try {
+    const data = await response.json();
+    if (!data.user || !data.access_token) {
+      logError("OAuth exchange response missing user or token", {
+        provider,
+        response: JSON.stringify(data).substring(0, 500),
+      });
+      throw new Error("Invalid response from server");
+    }
+
+    return { token: data.access_token, user: data.user };
+  } catch (error) {
+    logError("Failed to parse JSON from successful OAuth exchange", {
+      provider,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw new Error("Failed to parse server response.");
+  }
 }
 
 /**
