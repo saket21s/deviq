@@ -131,16 +131,18 @@ export async function exchangeCodeForToken(
   // ── 1. Clear pending storage FIRST (prevents retry loops) ──────────────
   clearPendingOAuth();
 
-  // ── 2. Exchange code with Vercel API route (keeps secrets server-side) ──
+  // ── 2. Exchange code with backend (keeps secrets server-side) ──────────
+  const API = "https://developer-portfolio-backend-bu76.onrender.com";
   const redirectUri = `${window.location.origin}/auth/callback/${provider}`;
 
-  const res = await fetch(`/api/auth/${provider}`, {
+  const res = await fetch(`${API}/auth/oauth`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify({
       code,
       redirect_uri: redirectUri,
+      provider,
     }),
   });
 
