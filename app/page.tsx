@@ -1104,7 +1104,8 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
   const [hdata, setHdata] = useState<HeatmapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
-  const heatColors = dark ? ["#1a1a1a", "#0d3320", "#155230", "#1e7a47", "#26a35e"] : ["#EBEBEB", "#BBF7D0", "#6EE7A0", "#22C55E", "#15803D"];
+  // GitHub-style colors: empty day is very light, then progressively darker
+  const heatColors = dark ? ["#0d1117", "#0d3320", "#155230", "#1e7a47", "#26a35e"] : ["#EBEDF0", "#C6E48B", "#7BC96F", "#239A3B", "#196127"];
   useEffect(() => {
     if (!username) return;
     let cancelled = false;
@@ -1180,7 +1181,7 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
                   {weeks.map((week, wi) => (
                     <div key={wi} style={{ display: "flex", flexDirection: "column", gap: GAP }}>
                       {week.map((day, di) => (
-                        <div key={di} style={{ width: CELL, height: CELL, borderRadius: 2, background: day ? heatColors[day.level] : heatColors[0], opacity: day?.count === 0 ? 0.5 : 1 }}
+                        <div key={di} style={{ width: CELL, height: CELL, borderRadius: 2, background: day ? heatColors[day.level] : heatColors[0], cursor: day ? "pointer" : "default" }}
                           onMouseEnter={e => { if (!day) return; const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setTooltip({ x: r.left + r.width / 2, y: r.top - 8, text: `${day.count} on ${day.date}` }); }}
                           onMouseLeave={() => setTooltip(null)} />
                       ))}
