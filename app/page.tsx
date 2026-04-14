@@ -3201,7 +3201,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
     { name: "Cisco", slug: "cisco", icon: "Cs", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/cisco.com.ico", bgColor: "#1BA0D7" },
     { name: "VMware", slug: "vmware", icon: "Vm", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/vmware.com.ico", bgColor: "#231F20" },
     { name: "Walmart", slug: "walmart", icon: "Wm", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/walmart.com.ico", bgColor: "#0071CE" },
-    { name: "JPMorgan", slug: "jpmorgan", icon: "JP", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/jpmorganchase.com.ico", bgColor: "#117DBA" },
+    { name: "JPMorgan", slug: "jpmorgan", icon: "JP", tier: "Mid", logo: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/JPMorgan_Chase_Co._logo.svg/2560px-JPMorgan_Chase_Co._logo.svg.png", bgColor: "#117DBA" },
     { name: "Samsung", slug: "samsung", icon: "Sm", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/samsung.com.ico", bgColor: "#1428A0" },
     { name: "Intuit", slug: "intuit", icon: "In", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/intuit.com.ico", bgColor: "#2A2D2E" },
     { name: "Yahoo", slug: "yahoo", icon: "Ya", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/yahoo.com.ico", bgColor: "#7C0082" },
@@ -3481,9 +3481,9 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                 background: isSelected ? tk.blueLight : tk.surface, cursor: "pointer", textAlign: "left" as const,
                 transition: "all 0.15s", position: "relative" as const
               }}>
-                <div style={{ width: 32, height: 32, borderRadius: 6, background: c.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, border: `1px solid ${isSelected ? tk.blue : tk.border}`, padding: "4px", overflow: "hidden" }}>
+                <div style={{ width: 32, height: 32, borderRadius: 6, background: c.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, overflow: "hidden" }}>
                   {c.logo && !failedLogos.has(c.logo) ? (
-                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo!)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                   ) : (
                     <span style={{ fontSize: 11, fontWeight: 700, color: "#ffffff" }}>{c.icon}</span>
                   )}
@@ -3530,9 +3530,9 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                 {(() => {
                   const info = companyList.find(c => c.slug === selectedCompany);
                   if (info) {
-                    return <div style={{ width: 40, height: 40, borderRadius: 6, background: info.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", padding: "6px", border: `1px solid ${tk.border}`, overflow: "hidden" }}>
+                    return <div style={{ width: 40, height: 40, borderRadius: 6, background: info.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                       {info.logo && !failedLogos.has(info.logo) ? (
-                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo!)} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                       ) : (
                         <span style={{ fontSize: 14, fontWeight: 700, color: "#ffffff" }}>{info.icon}</span>
                       )}
