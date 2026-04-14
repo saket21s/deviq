@@ -4384,12 +4384,17 @@ export default function Page() {
 
   useEffect(() => {
     const init = async () => {
-      const pathPage = window.location.pathname.replace(/^\/|\/$/, "") as Page;
+      // Detect page from URL pathname, preserving query params
+      const pathname = window.location.pathname.replace(/^\/|\/$|\/index\.html$/g, "").split('?')[0];
+      const pathPage = pathname as Page;
       const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following", "chat", "practice"];
-      const initialPage = validPages.includes(pathPage) ? pathPage : "home";
-      console.log("[DevIQ] Detected page from URL:", { pathname: window.location.pathname, pathPage, initialPage });
+      const initialPage = (pathname && validPages.includes(pathPage)) ? pathPage : "home";
+      console.log("[DevIQ] Detected page from URL:", { pathname, pathPage, initialPage, url: window.location.href });
       setPage(initialPage);
-      window.history.replaceState({ page: initialPage }, "", initialPage === "home" ? "/" : `/${initialPage}`);
+      
+      // Replace state with correct page to sync browser history
+      const url = initialPage === "home" ? "/" : `/${initialPage}`;
+      window.history.replaceState({ page: initialPage }, "", url);
 
       try {
         const storedDark = localStorage.getItem("deviq_dark");
