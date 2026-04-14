@@ -4346,6 +4346,7 @@ export default function Page() {
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
       const p = (e.state?.page as Page) || "home";
+      console.log("[DevIQ] Popstate event:", { page: p });
       setPage(p); setMenuOpen(false); setUserMenuOpen(false);
     };
     window.addEventListener("popstate", onPop); return () => window.removeEventListener("popstate", onPop);
@@ -4386,6 +4387,7 @@ export default function Page() {
       const pathPage = window.location.pathname.replace(/^\/|\/$/, "") as Page;
       const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following", "chat", "practice"];
       const initialPage = validPages.includes(pathPage) ? pathPage : "home";
+      console.log("[DevIQ] Detected page from URL:", { pathname: window.location.pathname, pathPage, initialPage });
       setPage(initialPage);
       window.history.replaceState({ page: initialPage }, "", initialPage === "home" ? "/" : `/${initialPage}`);
 
