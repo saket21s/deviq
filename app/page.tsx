@@ -3019,9 +3019,9 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
 /* ─────────────────────────────────────────────────
    PRACTICE PAGE
 ───────────────────────────────────────────────── */
-function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
+function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean;
-  onProfileSave: (p: UserProfile) => void;
+  onProfileSave: (p: UserProfile) => void; dark: boolean;
 }) {
   const p = profile;
   const [recommendedProblem, setRecommendedProblem] = useState<LeetCodeProblem | null>(null);
@@ -3472,8 +3472,12 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
                 background: isSelected ? tk.blueLight : tk.surface, cursor: "pointer", textAlign: "left" as const,
                 transition: "all 0.15s", position: "relative" as const
               }}>
-                <div style={{ width: 28, height: 28, borderRadius: 6, background: isSelected ? tk.blue : tk.bgAlt, color: isSelected ? tk.accentFg : tk.text2, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, marginBottom: 6, border: `1px solid ${isSelected ? tk.blue : tk.border}` }}>
-                  {c.icon}
+                <div style={{ width: 32, height: 32, borderRadius: 6, background: isSelected ? tk.blueLight : tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, border: `1px solid ${isSelected ? tk.blue : tk.border}`, padding: "4px", overflow: "hidden" }}>
+                  {c.logo ? (
+                    <img src={c.logo} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "contain", filter: dark ? "brightness(1.3) invert(0.1)" : "none" }} />
+                  ) : (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: isSelected ? tk.blue : tk.text2 }}>{c.icon}</span>
+                  )}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: isSelected ? tk.blue : tk.text, marginBottom: 2 }}>{c.name}</div>
                 <div style={{ fontSize: 11, color: tk.text3 }}>
@@ -3517,7 +3521,13 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
                 {(() => {
                   const info = companyList.find(c => c.slug === selectedCompany);
                   if (info) {
-                    return <div style={{ width: 32, height: 32, borderRadius: 6, background: tk.bgAlt, color: tk.text2, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700 }}>{info.icon}</div>;
+                    return <div style={{ width: 40, height: 40, borderRadius: 6, background: tk.surface, display: "flex", alignItems: "center", justifyContent: "center", padding: "6px", border: `1px solid ${tk.border}`, overflow: "hidden" }}>
+                      {info.logo ? (
+                        <img src={info.logo} alt={info.name} style={{ width: "100%", height: "100%", objectFit: "contain", filter: dark ? "brightness(1.3) invert(0.1)" : "none" }} />
+                      ) : (
+                        <span style={{ fontSize: 14, fontWeight: 700, color: tk.text2 }}>{info.icon}</span>
+                      )}
+                    </div>;
                   }
                   return null;
                 })()}
@@ -5550,7 +5560,7 @@ export default function Page() {
           )}
 
           {/* PRACTICE */}
-          {page === "practice" && user && <PracticePage user={user} profile={profile} tk={tk} isMobile={isMobile} onProfileSave={handleProfileSave} />}
+          {page === "practice" && user && <PracticePage user={user} profile={profile} tk={tk} isMobile={isMobile} onProfileSave={handleProfileSave} dark={dark} />}
           {page === "practice" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to get personalized practice recommendations.</div>
