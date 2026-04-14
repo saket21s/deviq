@@ -3232,17 +3232,21 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
   const fetchCompanyProblems = useCallback(async (slug: string) => {
     if (!slug) return;
+    console.log("[DevIQ] Fetching problems for company:", slug);
     setCompanyLoading(true);
     setCompanyData(null);
     setCompanyError(null);
     try {
-      const res = await fetch(`${API}/leetcode/company-problems/${slug}`);
+      const url = `${API}/leetcode/company-problems/${slug}`;
+      console.log("[DevIQ] API endpoint:", url);
+      const res = await fetch(url);
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
         const detail = errBody?.error || errBody?.detail || `Server returned ${res.status}`;
         throw new Error(detail);
       }
       const data = await res.json();
+      console.log("[DevIQ] Received problems count:", data.problems?.length, "for company:", slug);
       if (data && Array.isArray(data.problems) && data.problems.length > 0) {
         setCompanyData(data);
         setTimeout(() => {
