@@ -3190,7 +3190,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
     { name: "Adobe", slug: "adobe", icon: "Ad", tier: "Top", logo: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/adobe.svg", bgColor: "#FF0000" },
     { name: "Oracle", slug: "oracle", icon: "Or", tier: "Top", logo: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/oracle.svg", bgColor: "#F80000" },
     { name: "Salesforce", slug: "salesforce", icon: "Sf", tier: "Top", logo: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/salesforce.svg", bgColor: "#00A1E0" },
-    { name: "Twitter", slug: "twitter", icon: "Tw", tier: "Top", logo: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/twitter.svg", bgColor: "#000000" },
+    { name: "Twitter", slug: "twitter", icon: "Tw", tier: "Top", logo: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/x.svg", bgColor: "#000000" },
     { name: "Spotify", slug: "spotify", icon: "Sp", tier: "Mid", logo: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/spotify.svg", bgColor: "#1DB954" },
     { name: "Stripe", slug: "stripe", icon: "St", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/stripe.com.ico", bgColor: "#635BFF" },
     { name: "Airbnb", slug: "airbnb", icon: "Ab", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/airbnb.com.ico", bgColor: "#FF5A5F" },
