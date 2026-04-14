@@ -3040,6 +3040,11 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   const [companySearch, setCompanySearch] = useState("");
   const [companyTracking, setCompanyTracking] = useState<{ [slug: string]: string[] }>(p?.companyTracking || {});
   const [companyTierFilter, setCompanyTierFilter] = useState<"all" | "FAANG" | "Top" | "Mid">("all");
+  const [failedLogos, setFailedLogos] = useState<Set<string>>(new Set());
+
+  const handleLogoError = useCallback((logoUrl: string) => {
+    setFailedLogos(prev => new Set([...prev, logoUrl]));
+  }, []);
 
   const fetchAndAnalyzeLeetCode = useCallback(async (username: string) => {
     if (!username.trim()) return;
@@ -3473,8 +3478,8 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                 transition: "all 0.15s", position: "relative" as const
               }}>
                 <div style={{ width: 32, height: 32, borderRadius: 6, background: isSelected ? tk.blueLight : tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, border: `1px solid ${isSelected ? tk.blue : tk.border}`, padding: "4px", overflow: "hidden" }}>
-                  {c.logo ? (
-                    <img src={c.logo} alt={c.name} style={{ width: "100%", height: "100%", objectFit: "contain", filter: dark ? "brightness(1.3) invert(0.1)" : "none" }} />
+                  {c.logo && !failedLogos.has(c.logo) ? (
+                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo)} style={{ width: "100%", height: "100%", objectFit: "contain", filter: dark ? "brightness(1.3) invert(0.1)" : "none" }} />
                   ) : (
                     <span style={{ fontSize: 11, fontWeight: 700, color: isSelected ? tk.blue : tk.text2 }}>{c.icon}</span>
                   )}
@@ -3522,8 +3527,8 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                   const info = companyList.find(c => c.slug === selectedCompany);
                   if (info) {
                     return <div style={{ width: 40, height: 40, borderRadius: 6, background: tk.surface, display: "flex", alignItems: "center", justifyContent: "center", padding: "6px", border: `1px solid ${tk.border}`, overflow: "hidden" }}>
-                      {info.logo ? (
-                        <img src={info.logo} alt={info.name} style={{ width: "100%", height: "100%", objectFit: "contain", filter: dark ? "brightness(1.3) invert(0.1)" : "none" }} />
+                      {info.logo && !failedLogos.has(info.logo) ? (
+                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo)} style={{ width: "100%", height: "100%", objectFit: "contain", filter: dark ? "brightness(1.3) invert(0.1)" : "none" }} />
                       ) : (
                         <span style={{ fontSize: 14, fontWeight: 700, color: tk.text2 }}>{info.icon}</span>
                       )}
