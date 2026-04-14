@@ -3149,6 +3149,9 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
     if (p?.solvedProblems) {
       setSolvedProblems(p.solvedProblems);
     }
+    if (p?.companyTracking) {
+      setCompanyTracking(p.companyTracking);
+    }
   }, [p]);
 
   const markProblemSolved = (problem: LeetCodeProblem) => {
@@ -3279,7 +3282,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
 
   const filteredProblems = (companyData?.problems || []).filter(prob => {
     if (companyFilter !== "all" && prob.difficulty !== companyFilter) return false;
-    if (companySearch && !prob.title.toLowerCase().includes(companySearch.toLowerCase()) && !prob.topicTags.some(t => t.toLowerCase().includes(companySearch.toLowerCase()))) return false;
+    if (companySearch && !prob.title.toLowerCase().includes(companySearch.toLowerCase()) && !(prob.topicTags || []).some(t => t.toLowerCase().includes(companySearch.toLowerCase()))) return false;
     return true;
   });
 
@@ -3344,7 +3347,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
                 <span style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: 6, background: recommendedProblem.difficulty === "Hard" ? tk.rose + "20" : recommendedProblem.difficulty === "Medium" ? tk.amber + "20" : tk.green + "20", color: recommendedProblem.difficulty === "Hard" ? tk.rose : recommendedProblem.difficulty === "Medium" ? tk.amber : tk.green }}>
                   {recommendedProblem.difficulty}
                 </span>
-                {recommendedProblem.topicTags.map(tag => (
+                {(recommendedProblem.topicTags || []).map(tag => (
                   <span key={tag} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, background: tk.bgAlt, color: tk.text2, border: `1px solid ${tk.border}` }}>
                     {tag}
                   </span>
@@ -3523,10 +3526,10 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
                     {companyData.company}
                   </h3>
                   <div style={{ fontSize: 12, color: tk.text3 }}>
-                    {companyData.total_problems} problems • {companySolvedCount(selectedCompany)} solved
-                    {companyData.total_problems > 0 && (
+                    {companyData.problems.length} problems • {companySolvedCount(selectedCompany)} solved
+                    {companyData.problems.length > 0 && (
                       <span style={{ marginLeft: 8, color: tk.blue, fontWeight: 600 }}>
-                        ({Math.round((companySolvedCount(selectedCompany) / companyData.total_problems) * 100)}%)
+                        ({Math.round((companySolvedCount(selectedCompany) / companyData.problems.length) * 100)}%)
                       </span>
                     )}
                   </div>
@@ -3537,11 +3540,11 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
                 <svg width="48" height="48" viewBox="0 0 48 48">
                   <circle cx="24" cy="24" r="20" fill="none" stroke={tk.border} strokeWidth="4" />
                   <circle cx="24" cy="24" r="20" fill="none" stroke={tk.green} strokeWidth="4"
-                    strokeDasharray={`${(companySolvedCount(selectedCompany) / Math.max(1, companyData.total_problems)) * 125.6} 125.6`}
+                    strokeDasharray={`${(companySolvedCount(selectedCompany) / Math.max(1, companyData.problems.length)) * 125.6} 125.6`}
                     strokeLinecap="round" transform="rotate(-90 24 24)" />
                 </svg>
                 <div style={{ position: "absolute" as const, inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: tk.text }}>
-                  {companyData.total_problems > 0 ? Math.round((companySolvedCount(selectedCompany) / companyData.total_problems) * 100) : 0}%
+                  {companyData.problems.length > 0 ? Math.round((companySolvedCount(selectedCompany) / companyData.problems.length) * 100) : 0}%
                 </div>
               </div>
             </div>
@@ -3620,10 +3623,10 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave }: {
                           {prob.paidOnly && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: tk.amberLight, color: tk.amber, fontWeight: 700, border: `1px solid ${tk.amberBorder}`, flexShrink: 0 }}>Premium</span>}
                         </div>
                         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" as const }}>
-                          {prob.topicTags.slice(0, 3).map(tag => (
+                          {(prob.topicTags || []).slice(0, 3).map(tag => (
                             <span key={tag} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: tk.bgAlt, color: tk.text3, border: `1px solid ${tk.border}` }}>{tag}</span>
                           ))}
-                          {prob.topicTags.length > 3 && <span style={{ fontSize: 10, color: tk.text3 }}>+{prob.topicTags.length - 3}</span>}
+                          {(prob.topicTags || []).length > 3 && <span style={{ fontSize: 10, color: tk.text3 }}>+{(prob.topicTags || []).length - 3}</span>}
                         </div>
                       </div>
 
