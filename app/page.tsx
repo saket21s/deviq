@@ -3481,9 +3481,9 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                 background: isSelected ? tk.blueLight : tk.surface, cursor: "pointer", textAlign: "left" as const,
                 transition: "all 0.15s", position: "relative" as const
               }}>
-                <div style={{ width: 32, height: 32, borderRadius: 6, background: c.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, overflow: "hidden" }}>
+                <div style={{ width: 40, height: 40, borderRadius: 6, background: c.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, overflow: "hidden" }}>
                   {c.logo && !failedLogos.has(c.logo) ? (
-                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: "2px" }} />
+                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: "4px" }} />
                   ) : (
                     <span style={{ fontSize: 11, fontWeight: 700, color: "#ffffff" }}>{c.icon}</span>
                   )}
@@ -3530,9 +3530,9 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                 {(() => {
                   const info = companyList.find(c => c.slug === selectedCompany);
                   if (info) {
-                    return <div style={{ width: 40, height: 40, borderRadius: 6, background: info.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                    return <div style={{ width: 48, height: 48, borderRadius: 6, background: info.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                       {info.logo && !failedLogos.has(info.logo) ? (
-                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: "3px" }} />
+                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: "4px" }} />
                       ) : (
                         <span style={{ fontSize: 14, fontWeight: 700, color: "#ffffff" }}>{info.icon}</span>
                       )}
