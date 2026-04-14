@@ -3040,6 +3040,11 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   const [companySearch, setCompanySearch] = useState("");
   const [companyTracking, setCompanyTracking] = useState<{ [slug: string]: string[] }>(p?.companyTracking || {});
   const [companyTierFilter, setCompanyTierFilter] = useState<"all" | "FAANG" | "Top" | "Mid">("all");
+  const [failedLogos, setFailedLogos] = useState<Set<string>>(new Set());
+
+  const handleLogoError = useCallback((logoUrl: string) => {
+    setFailedLogos(prev => new Set([...prev, logoUrl]));
+  }, []);
 
   const fetchAndAnalyzeLeetCode = useCallback(async (username: string) => {
     if (!username.trim()) return;
@@ -3172,34 +3177,34 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
   // ── Company Tags Logic ──
   const defaultCompanies: CompanyInfo[] = [
-    { name: "Google", slug: "google", icon: "G", tier: "FAANG", logo: "", bgColor: "#4285F4" },
-    { name: "Amazon", slug: "amazon", icon: "A", tier: "FAANG", logo: "", bgColor: "#FF9900" },
-    { name: "Meta", slug: "facebook", icon: "M", tier: "FAANG", logo: "", bgColor: "#1877F2" },
-    { name: "Apple", slug: "apple", icon: "Ap", tier: "FAANG", logo: "", bgColor: "#000000" },
-    { name: "Netflix", slug: "netflix", icon: "N", tier: "FAANG", logo: "", bgColor: "#E50914" },
-    { name: "Microsoft", slug: "microsoft", icon: "Ms", tier: "FAANG", logo: "", bgColor: "#0078D4" },
-    { name: "Bloomberg", slug: "bloomberg", icon: "Bl", tier: "Top", logo: "", bgColor: "#000000" },
-    { name: "Goldman Sachs", slug: "goldman-sachs", icon: "GS", tier: "Top", logo: "", bgColor: "#003DA5" },
-    { name: "Uber", slug: "uber", icon: "Ub", tier: "Top", logo: "", bgColor: "#000000" },
-    { name: "LinkedIn", slug: "linkedin", icon: "Li", tier: "Top", logo: "", bgColor: "#0A66C2" },
-    { name: "Adobe", slug: "adobe", icon: "Ad", tier: "Top", logo: "", bgColor: "#FF0000" },
-    { name: "Oracle", slug: "oracle", icon: "Or", tier: "Top", logo: "", bgColor: "#F80000" },
-    { name: "Salesforce", slug: "salesforce", icon: "Sf", tier: "Top", logo: "", bgColor: "#00A1E0" },
-    { name: "Twitter", slug: "twitter", icon: "Tw", tier: "Top", logo: "", bgColor: "#000000" },
-    { name: "Spotify", slug: "spotify", icon: "Sp", tier: "Mid", logo: "", bgColor: "#1DB954" },
-    { name: "Stripe", slug: "stripe", icon: "St", tier: "Mid", logo: "", bgColor: "#635BFF" },
-    { name: "Airbnb", slug: "airbnb", icon: "Ab", tier: "Mid", logo: "", bgColor: "#FF5A5F" },
-    { name: "Snap", slug: "snapchat", icon: "Sn", tier: "Mid", logo: "", bgColor: "#FFFC00" },
-    { name: "TikTok", slug: "tiktok", icon: "Tk", tier: "Mid", logo: "", bgColor: "#000000" },
-    { name: "Nvidia", slug: "nvidia", icon: "Nv", tier: "Mid", logo: "", bgColor: "#76B900" },
-    { name: "PayPal", slug: "paypal", icon: "Pp", tier: "Mid", logo: "", bgColor: "#003087" },
-    { name: "Cisco", slug: "cisco", icon: "Cs", tier: "Mid", logo: "", bgColor: "#1BA0D7" },
-    { name: "VMware", slug: "vmware", icon: "Vm", tier: "Mid", logo: "", bgColor: "#231F20" },
-    { name: "Walmart", slug: "walmart", icon: "Wm", tier: "Mid", logo: "", bgColor: "#0071CE" },
-    { name: "JPMorgan", slug: "jpmorgan", icon: "JP", tier: "Mid", logo: "", bgColor: "#117DBA" },
-    { name: "Samsung", slug: "samsung", icon: "Sm", tier: "Mid", logo: "", bgColor: "#1428A0" },
-    { name: "Intuit", slug: "intuit", icon: "In", tier: "Mid", logo: "", bgColor: "#2A2D2E" },
-    { name: "Yahoo", slug: "yahoo", icon: "Ya", tier: "Mid", logo: "", bgColor: "#7C0082" },
+    { name: "Google", slug: "google", icon: "G", tier: "FAANG", logo: "https://cdn.simpleicons.org/google/4285F4", bgColor: "#4285F4" },
+    { name: "Amazon", slug: "amazon", icon: "A", tier: "FAANG", logo: "https://cdn.simpleicons.org/amazon/FF9900", bgColor: "#FF9900" },
+    { name: "Meta", slug: "facebook", icon: "M", tier: "FAANG", logo: "https://cdn.simpleicons.org/meta/1877F2", bgColor: "#1877F2" },
+    { name: "Apple", slug: "apple", icon: "Ap", tier: "FAANG", logo: "https://cdn.simpleicons.org/apple/000000", bgColor: "#000000" },
+    { name: "Netflix", slug: "netflix", icon: "N", tier: "FAANG", logo: "https://cdn.simpleicons.org/netflix/E50914", bgColor: "#E50914" },
+    { name: "Microsoft", slug: "microsoft", icon: "Ms", tier: "FAANG", logo: "https://cdn.simpleicons.org/microsoft/0078D4", bgColor: "#0078D4" },
+    { name: "Bloomberg", slug: "bloomberg", icon: "Bl", tier: "Top", logo: "https://cdn.simpleicons.org/bloomberg/000000", bgColor: "#000000" },
+    { name: "Goldman Sachs", slug: "goldman-sachs", icon: "GS", tier: "Top", logo: "https://cdn.simpleicons.org/goldmansachs/003DA5", bgColor: "#003DA5" },
+    { name: "Uber", slug: "uber", icon: "Ub", tier: "Top", logo: "https://cdn.simpleicons.org/uber/000000", bgColor: "#000000" },
+    { name: "LinkedIn", slug: "linkedin", icon: "Li", tier: "Top", logo: "https://cdn.simpleicons.org/linkedin/0A66C2", bgColor: "#0A66C2" },
+    { name: "Adobe", slug: "adobe", icon: "Ad", tier: "Top", logo: "https://cdn.simpleicons.org/adobe/FF0000", bgColor: "#FF0000" },
+    { name: "Oracle", slug: "oracle", icon: "Or", tier: "Top", logo: "https://cdn.simpleicons.org/oracle/F80000", bgColor: "#F80000" },
+    { name: "Salesforce", slug: "salesforce", icon: "Sf", tier: "Top", logo: "https://cdn.simpleicons.org/salesforce/00A1E0", bgColor: "#00A1E0" },
+    { name: "Twitter", slug: "twitter", icon: "Tw", tier: "Top", logo: "https://cdn.simpleicons.org/x/000000", bgColor: "#000000" },
+    { name: "Spotify", slug: "spotify", icon: "Sp", tier: "Mid", logo: "https://cdn.simpleicons.org/spotify/1DB954", bgColor: "#1DB954" },
+    { name: "Stripe", slug: "stripe", icon: "St", tier: "Mid", logo: "https://cdn.simpleicons.org/stripe/635BFF", bgColor: "#635BFF" },
+    { name: "Airbnb", slug: "airbnb", icon: "Ab", tier: "Mid", logo: "https://cdn.simpleicons.org/airbnb/FF5A5F", bgColor: "#FF5A5F" },
+    { name: "Snap", slug: "snapchat", icon: "Sn", tier: "Mid", logo: "https://cdn.simpleicons.org/snapchat/FFFC00", bgColor: "#FFFC00" },
+    { name: "TikTok", slug: "tiktok", icon: "Tk", tier: "Mid", logo: "https://cdn.simpleicons.org/tiktok/000000", bgColor: "#000000" },
+    { name: "Nvidia", slug: "nvidia", icon: "Nv", tier: "Mid", logo: "https://cdn.simpleicons.org/nvidia/76B900", bgColor: "#76B900" },
+    { name: "PayPal", slug: "paypal", icon: "Pp", tier: "Mid", logo: "https://cdn.simpleicons.org/paypal/003087", bgColor: "#003087" },
+    { name: "Cisco", slug: "cisco", icon: "Cs", tier: "Mid", logo: "https://cdn.simpleicons.org/cisco/1BA0D7", bgColor: "#1BA0D7" },
+    { name: "VMware", slug: "vmware", icon: "Vm", tier: "Mid", logo: "https://cdn.simpleicons.org/vmware/231F20", bgColor: "#231F20" },
+    { name: "Walmart", slug: "walmart", icon: "Wm", tier: "Mid", logo: "https://cdn.simpleicons.org/walmart/0071CE", bgColor: "#0071CE" },
+    { name: "JPMorgan", slug: "jpmorgan", icon: "JP", tier: "Mid", logo: "https://cdn.simpleicons.org/jpmorganchase/117DBA", bgColor: "#117DBA" },
+    { name: "Samsung", slug: "samsung", icon: "Sm", tier: "Mid", logo: "https://cdn.simpleicons.org/samsung/1428A0", bgColor: "#1428A0" },
+    { name: "Intuit", slug: "intuit", icon: "In", tier: "Mid", logo: "https://cdn.simpleicons.org/intuit/2A2D2E", bgColor: "#2A2D2E" },
+    { name: "Yahoo", slug: "yahoo", icon: "Ya", tier: "Mid", logo: "https://cdn.simpleicons.org/yahoo/7C0082", bgColor: "#7C0082" },
   ];
 
   useEffect(() => {
@@ -3473,7 +3478,11 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                 transition: "all 0.15s", position: "relative" as const
               }}>
                 <div style={{ width: 32, height: 32, borderRadius: 6, background: c.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, border: `1px solid ${isSelected ? tk.blue : tk.border}`, padding: "4px", overflow: "hidden" }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#ffffff" }}>{c.icon}</span>
+                  {c.logo && !failedLogos.has(c.logo) ? (
+                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                  ) : (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#ffffff" }}>{c.icon}</span>
+                  )}
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: isSelected ? tk.blue : tk.text, marginBottom: 2 }}>{c.name}</div>
                 <div style={{ fontSize: 11, color: tk.text3 }}>
@@ -3518,7 +3527,11 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                   const info = companyList.find(c => c.slug === selectedCompany);
                   if (info) {
                     return <div style={{ width: 40, height: 40, borderRadius: 6, background: info.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", padding: "6px", border: `1px solid ${tk.border}`, overflow: "hidden" }}>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: "#ffffff" }}>{info.icon}</span>
+                      {info.logo && !failedLogos.has(info.logo) ? (
+                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                      ) : (
+                        <span style={{ fontSize: 14, fontWeight: 700, color: "#ffffff" }}>{info.icon}</span>
+                      )}
                     </div>;
                   }
                   return null;
