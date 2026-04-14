@@ -3201,7 +3201,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
     { name: "Cisco", slug: "cisco", icon: "Cs", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/cisco.com.ico", bgColor: "#1BA0D7" },
     { name: "VMware", slug: "vmware", icon: "Vm", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/vmware.com.ico", bgColor: "#231F20" },
     { name: "Walmart", slug: "walmart", icon: "Wm", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/walmart.com.ico", bgColor: "#0071CE" },
-    { name: "JPMorgan", slug: "jpmorgan", icon: "JP", tier: "Mid", logo: "https://cdn.worldvectorlogo.com/logos/jp-morgan.svg", bgColor: "#117DBA" },
+    { name: "JPMorgan", slug: "jpmorgan", icon: "JP", tier: "Mid", logo: "/jp-morgan.svg", bgColor: "#117DBA" },
     { name: "Samsung", slug: "samsung", icon: "Sm", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/samsung.com.ico", bgColor: "#1428A0" },
     { name: "Intuit", slug: "intuit", icon: "In", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/intuit.com.ico", bgColor: "#2A2D2E" },
     { name: "Yahoo", slug: "yahoo", icon: "Ya", tier: "Mid", logo: "https://icons.duckduckgo.com/ip3/yahoo.com.ico", bgColor: "#7C0082" },
