@@ -3479,7 +3479,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
               }}>
                 <div style={{ width: 32, height: 32, borderRadius: 6, background: c.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 6, border: `1px solid ${isSelected ? tk.blue : tk.border}`, padding: "4px", overflow: "hidden" }}>
                   {c.logo && !failedLogos.has(c.logo) ? (
-                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                    <img src={c.logo} alt={c.name} onError={() => handleLogoError(c.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                   ) : (
                     <span style={{ fontSize: 11, fontWeight: 700, color: "#ffffff" }}>{c.icon}</span>
                   )}
@@ -3528,7 +3528,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                   if (info) {
                     return <div style={{ width: 40, height: 40, borderRadius: 6, background: info.bgColor || tk.surface, display: "flex", alignItems: "center", justifyContent: "center", padding: "6px", border: `1px solid ${tk.border}`, overflow: "hidden" }}>
                       {info.logo && !failedLogos.has(info.logo) ? (
-                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                        <img src={info.logo} alt={info.name} onError={() => handleLogoError(info.logo!)} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
                       ) : (
                         <span style={{ fontSize: 14, fontWeight: 700, color: "#ffffff" }}>{info.icon}</span>
                       )}
