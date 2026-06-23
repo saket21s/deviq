@@ -5451,7 +5451,9 @@ export default function Page() {
             width: "74%", maxWidth: 290,
             maxHeight: "calc(100vh - 96px)",
             borderRadius: 28, overflow: "hidden",
-            background: `linear-gradient(165deg, ${dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)"}, ${dark ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.015)"})`,
+            background: dark 
+              ? "linear-gradient(165deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025))"
+              : "linear-gradient(165deg, rgba(255,255,255,0.92), rgba(255,255,255,0.85))",
             backdropFilter: "blur(28px) saturate(170%)",
             WebkitBackdropFilter: "blur(28px) saturate(170%)",
             border: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)"}`,
