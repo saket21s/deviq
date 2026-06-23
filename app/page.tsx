@@ -3523,16 +3523,10 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
         {/* Error state */}
         {companyError && !companyLoading && (
-          <div style={{ padding: 32, border: `1px solid ${tk.roseBorder}`, borderRadius: 12, background: tk.roseLight, textAlign: "center" }}>
-            <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.roseLight, border: `1px solid ${tk.roseBorder}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.rose} strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></svg></div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: tk.rose, marginBottom: 6 }}>Failed to Load Problems</div>
-            <div style={{ fontSize: 13, color: tk.text2, marginBottom: 16, lineHeight: 1.5, maxWidth: 400, margin: "0 auto 16px" }}>{companyError}</div>
-            <button onClick={() => fetchCompanyProblems(selectedCompany)} style={{
-              padding: "8px 20px", borderRadius: 8, border: `1px solid ${tk.roseBorder}`,
-              background: tk.surface, color: tk.rose, cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "all 0.15s"
-            }}>
-              ↻ Retry
-            </button>
+          <div style={{ padding: 32, border: `1px solid ${tk.border}`, borderRadius: 12, textAlign: "center" }}>
+            <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></svg></div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: tk.text, marginBottom: 6 }}>Coming Soon</div>
+            <div style={{ fontSize: 13, color: tk.text2, marginBottom: 16, lineHeight: 1.5, maxWidth: 400, margin: "0 auto 16px" }}>Company-specific problem lists are being updated. Try again later.</div>
           </div>
         )}
 
