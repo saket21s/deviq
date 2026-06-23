@@ -6,9 +6,6 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
 
-  // Trailing slash for better GitHub Pages compatibility
-  trailingSlash: true,
-
   // Disable ESLint during builds
   eslint: {
     ignoreDuringBuilds: true,
