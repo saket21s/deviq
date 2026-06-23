@@ -1616,9 +1616,9 @@ function CompareMode({ tk, isMobile, onComparison }: { tk: Theme; isMobile: bool
   useEffect(() => { try { if (dataB) sessionStorage.setItem("deviq_cmpDataB", JSON.stringify(dataB)); else sessionStorage.removeItem("deviq_cmpDataB"); } catch { } }, [dataB]);
   const fetchDev = async (f: { gh: string; lc: string; cf: string }, set: (d: ResultData) => void, setL: (b: boolean) => void) => {
     setL(true); const r: Partial<ResultData> = {};
-    if (f.gh) { try { const r = await fetch(`/api/proxy/analyze/${f.gh.trim()}?v=${Date.now()}`); const t = await r.text(); if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.github = j; } } catch { } }
-    if (f.lc) { try { const r = await fetch(`/api/proxy/leetcode/${f.lc.trim()}?v=${Date.now()}`); const t = await r.text(); if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.leetcode = j; } } catch { } }
-    if (f.cf) { try { const r = await fetch(`/api/proxy/codeforces/${f.cf.trim()}?v=${Date.now()}`); const t = await r.text(); if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.codeforces = j; } } catch { } }
+    if (f.gh) { try { const res = await fetch(`/api/proxy/analyze/${f.gh.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.github = j; } } catch { } }
+    if (f.lc) { try { const res = await fetch(`/api/proxy/leetcode/${f.lc.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.leetcode = j; } } catch { } }
+    if (f.cf) { try { const res = await fetch(`/api/proxy/codeforces/${f.cf.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.codeforces = j; } } catch { } }
     let s = 0; if (r.github?.analytics?.skill_score) s += r.github.analytics.skill_score * 0.4; if (r.leetcode?.total_solved) s += Math.min(100, r.leetcode.easy_solved + r.leetcode.medium_solved * 3 + r.leetcode.hard_solved * 6) * 0.35; if (r.codeforces?.rating) s += Math.min(100, r.codeforces.rating / 35) * 0.25;
     r.combined_score = Math.round(s * 10) / 10; set(r as ResultData); setL(false);
   };
