@@ -257,12 +257,14 @@ function normalizeProvider(provider?: string): "google" | "github" | "email" | u
   return undefined;
 }
 
+const BACKEND = "https://developer-portfolio-backend-bu76.onrender.com";
+
 function normalizeAvatarUrl(url?: string): string | undefined {
   const raw = (url || "").trim();
   if (!raw) return undefined;
   if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
   try {
-    return new URL(raw, "/api/proxy").toString();
+    return new URL(raw, BACKEND).toString();
   } catch {
     return raw;
   }
@@ -340,7 +342,8 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
     }
   }
 
-  const base = "/api/proxy";
+  const BACKEND = "https://developer-portfolio-backend-bu76.onrender.com";
+  const base = BACKEND;
   console.log(`🌐 API Request: ${base}${path}`, {
     method: opts.method || 'GET',
     hasAuthToken: !!authToken
@@ -471,7 +474,7 @@ async function apiGmailLogin(user?: { name?: string; email?: string; avatar?: st
     const email = (user?.email || "").trim();
     if (!email) return null;
 
-    const response = await fetch(`/api/proxy/auth/gmail/login`, {
+    const response = await fetch(`${BACKEND}/auth/gmail/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -1134,7 +1137,7 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
       setHdata(null);
 
       try {
-        const r = await fetch(`/api/proxy/contributions/${encodeURIComponent(username)}`);
+        const r = await fetch(`${BACKEND}/contributions/${encodeURIComponent(username)}`);
         const body = await r.json().catch(() => null);
 
         if (!r.ok) {
@@ -1435,7 +1438,7 @@ Combined DevIQ Score: ${data.combined_score}/100`;
   const call = async (m: AIMode) => {
     setLoading(m);
     try {
-      const response = await fetch(`/api/proxy/ai/insights`, {
+      const response = await fetch(`${BACKEND}/ai/insights`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: PROMPTS[m] })
@@ -1465,7 +1468,7 @@ Combined DevIQ Score: ${data.combined_score}/100`;
     if (translated[mode]) { setShowHindi(s => ({ ...s, [mode]: !s[mode] })); return; }
     setTranslating(true);
     try {
-      const response = await fetch(`/api/proxy/ai/insights`, {
+      const response = await fetch(`${BACKEND}/ai/insights`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: `Translate the following text to Hindi. Keep formatting (bold markers **, bullet points •) intact. Only translate the text:\n\n${current}` })
@@ -1616,9 +1619,9 @@ function CompareMode({ tk, isMobile, onComparison }: { tk: Theme; isMobile: bool
   useEffect(() => { try { if (dataB) sessionStorage.setItem("deviq_cmpDataB", JSON.stringify(dataB)); else sessionStorage.removeItem("deviq_cmpDataB"); } catch { } }, [dataB]);
   const fetchDev = async (f: { gh: string; lc: string; cf: string }, set: (d: ResultData) => void, setL: (b: boolean) => void) => {
     setL(true); const r: Partial<ResultData> = {};
-    if (f.gh) { try { const res = await fetch(`/api/proxy/analyze/${f.gh.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.github = j; } } catch { } }
-    if (f.lc) { try { const res = await fetch(`/api/proxy/leetcode/${f.lc.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.leetcode = j; } } catch { } }
-    if (f.cf) { try { const res = await fetch(`/api/proxy/codeforces/${f.cf.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.codeforces = j; } } catch { } }
+    if (f.gh) { try { const res = await fetch(`${BACKEND}/analyze/${f.gh.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.github = j; } } catch { } }
+    if (f.lc) { try { const res = await fetch(`${BACKEND}/leetcode/${f.lc.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.leetcode = j; } } catch { } }
+    if (f.cf) { try { const res = await fetch(`${BACKEND}/codeforces/${f.cf.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.codeforces = j; } } catch { } }
     let s = 0; if (r.github?.analytics?.skill_score) s += r.github.analytics.skill_score * 0.4; if (r.leetcode?.total_solved) s += Math.min(100, r.leetcode.easy_solved + r.leetcode.medium_solved * 3 + r.leetcode.hard_solved * 6) * 0.35; if (r.codeforces?.rating) s += Math.min(100, r.codeforces.rating / 35) * 0.25;
     r.combined_score = Math.round(s * 10) / 10; set(r as ResultData); setL(false);
   };
@@ -2881,7 +2884,7 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
         messages.slice(-10).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') +
         "\nUser: " + userMessage.content + "\nAssistant:";
 
-      const response = await fetch(`/api/proxy/ai/insights`, {
+      const response = await fetch(`${BACKEND}/ai/insights`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: fullPrompt })
@@ -3065,7 +3068,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
       try {
         // Attempt to use backend API
-        const res = await fetch(`/api/proxy/analyze?leetcode=${encodeURIComponent(username)}`);
+        const res = await fetch(`${BACKEND}/analyze?leetcode=${encodeURIComponent(username)}`);
         if (res.ok) {
           const data = await res.json();
           if (data.leetcode) {
@@ -3222,7 +3225,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
     // Then try to fetch from API for any updates
     (async () => {
       try {
-        const res = await fetch(`/api/proxy/leetcode/companies`);
+        const res = await fetch(`${BACKEND}/leetcode/companies`);
         if (res.ok) {
           const data = await res.json();
           if (data.companies && data.companies.length > 0) {
@@ -3246,7 +3249,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
     setCompanyData(null);
     setCompanyError(null);
     try {
-      const url = `/api/proxy/leetcode/company-problems/${slug}`;
+      const url = `${BACKEND}/leetcode/company-problems/${slug}`;
       console.log("[DevIQ] API endpoint:", url);
       const res = await fetch(url);
       if (!res.ok) {
@@ -5097,13 +5100,10 @@ export default function Page() {
     }
   };
 
-  const API_BACKEND = "https://developer-portfolio-backend-bu76.onrender.com";
-  const WARMED = useRef(false);
-
   async function fetchApi(path: string, retries = 6): Promise<any> {
     for (let i = 0; i < retries; i++) {
       try {
-        const r = await fetch(`${API_BACKEND}${path}`, { mode: "cors" });
+        const r = await fetch(`${BACKEND}${path}`, { mode: "cors" });
         const t = await r.text();
         if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) {
           const j = JSON.parse(t);
@@ -5116,12 +5116,8 @@ export default function Page() {
     throw new Error("backend unavailable");
   }
 
-  // Warm up the backend on mount
   useEffect(() => {
-    if (!WARMED.current) {
-      WARMED.current = true;
-      fetch(`${API_BACKEND}/analyze/ping`, { mode: "cors" }).catch(() => {});
-    }
+    fetch(`${BACKEND}/analyze/ping`, { mode: "cors" }).catch(() => {});
   }, []);
 
   const analyze = useCallback(async () => {
