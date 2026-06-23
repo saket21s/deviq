@@ -408,6 +408,79 @@ def codeforces_analyze(username: str):
     return data
 
 
+@app.get("/contributions/{username}")
+def contributions(username: str):
+    """Fetch GitHub contribution calendar for a user."""
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise HTTPException(status_code=500, detail="GITHUB_TOKEN not configured on server")
+
+    gql = """query($login:String!){user(login:$login){contributionsCollection{contributionCalendar{totalContributions weeks{contributionDays{date contributionCount contributionLevel}}}}}}"""
+
+    try:
+        r = requests.post(
+            "https://api.github.com/graphql",
+            json={"query": gql, "variables": {"login": username}},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "DevIQ/1.0",
+            },
+            timeout=15,
+        )
+        if not r.ok:
+            raise HTTPException(status_code=r.status_code, detail=f"GitHub API returned {r.status_code}")
+
+        b = r.json()
+        if b.get("errors"):
+            raise HTTPException(status_code=400, detail=b["errors"][0]["message"])
+        if not b.get("data", {}).get("user"):
+            raise HTTPException(status_code=404, detail=f"GitHub user '{username}' not found")
+
+        cal = b["data"]["user"]["contributionsCollection"]["contributionCalendar"]
+        contributions = []
+        LEVEL_MAP = {"NONE": 0, "FIRST_QUARTILE": 1, "SECOND_QUARTILE": 2, "THIRD_QUARTILE": 3, "FOURTH_QUARTILE": 4}
+
+        for w in cal["weeks"]:
+            for d in w["contributionDays"]:
+                contributions.append({
+                    "date": d["date"],
+                    "count": d["contributionCount"],
+                    "level": LEVEL_MAP.get(d["contributionLevel"], 0),
+                })
+
+        contributions.sort(key=lambda x: x["date"])
+
+        longest = 0
+        temp = 0
+        for d in contributions:
+            if d["count"] > 0:
+                temp += 1
+                longest = max(longest, temp)
+            else:
+                temp = 0
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        days = contributions[:-1] if contributions and contributions[-1]["date"] == today and contributions[-1]["count"] == 0 else contributions
+        current = 0
+        for i in range(len(days) - 1, -1, -1):
+            if days[i]["count"] > 0:
+                current += 1
+            else:
+                break
+
+        return {
+            "contributions": contributions,
+            "total_last_year": cal["totalContributions"],
+            "current_streak": current,
+            "longest_streak": longest,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Server error: {str(e)}")
+
+
 # ─────────────────────────────────────────────────
 # Firebase Authentication endpoints
 # ─────────────────────────────────────────────────
