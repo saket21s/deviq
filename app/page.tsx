@@ -1616,9 +1616,9 @@ function CompareMode({ tk, isMobile, onComparison }: { tk: Theme; isMobile: bool
   useEffect(() => { try { if (dataB) sessionStorage.setItem("deviq_cmpDataB", JSON.stringify(dataB)); else sessionStorage.removeItem("deviq_cmpDataB"); } catch { } }, [dataB]);
   const fetchDev = async (f: { gh: string; lc: string; cf: string }, set: (d: ResultData) => void, setL: (b: boolean) => void) => {
     setL(true); const r: Partial<ResultData> = {};
-    if (f.gh) { try { const res = await fetch(`/api/proxy/analyze/${f.gh.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json")) { const j = JSON.parse(t); if (!j.error) r.github = j; } } catch { } }
-    if (f.lc) { try { const res = await fetch(`/api/proxy/leetcode/${f.lc.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json")) { const j = JSON.parse(t); if (!j.error) r.leetcode = j; } } catch { } }
-    if (f.cf) { try { const res = await fetch(`/api/proxy/codeforces/${f.cf.trim()}?v=${Date.now()}`); const t = await res.text(); if (res.headers.get("content-type")?.includes("json")) { const j = JSON.parse(t); if (!j.error) r.codeforces = j; } } catch { } }
+    if (f.gh) { try { const r = await fetch(`/api/proxy/analyze/${f.gh.trim()}?v=${Date.now()}`); const t = await r.text(); if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.github = j; } } catch { } }
+    if (f.lc) { try { const r = await fetch(`/api/proxy/leetcode/${f.lc.trim()}?v=${Date.now()}`); const t = await r.text(); if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.leetcode = j; } } catch { } }
+    if (f.cf) { try { const r = await fetch(`/api/proxy/codeforces/${f.cf.trim()}?v=${Date.now()}`); const t = await r.text(); if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) { const j = JSON.parse(t); if (!j.error) r.codeforces = j; } } catch { } }
     let s = 0; if (r.github?.analytics?.skill_score) s += r.github.analytics.skill_score * 0.4; if (r.leetcode?.total_solved) s += Math.min(100, r.leetcode.easy_solved + r.leetcode.medium_solved * 3 + r.leetcode.hard_solved * 6) * 0.35; if (r.codeforces?.rating) s += Math.min(100, r.codeforces.rating / 35) * 0.25;
     r.combined_score = Math.round(s * 10) / 10; set(r as ResultData); setL(false);
   };
@@ -5097,6 +5097,25 @@ export default function Page() {
     }
   };
 
+  async function fetchApi(path: string, retries = 3): Promise<any> {
+    for (let i = 0; i < retries; i++) {
+      const r = await fetch(`/api/proxy${path}?v=${Date.now()}`);
+      const t = await r.text();
+      if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) {
+        const j = JSON.parse(t);
+        if (j.error) throw new Error(j.error);
+        return j;
+      }
+      if (i < retries - 1) await new Promise(r => setTimeout(r, 2000));
+    }
+    throw new Error("backend unavailable");
+  }
+
+  // Warm up the backend on mount so it's ready when the user submits
+  useEffect(() => {
+    fetch(`/api/proxy/analyze/ping?warm=${Date.now()}`).catch(() => {});
+  }, []);
+
   const analyze = useCallback(async () => {
     if (!gh && !lc && !cf) return;
     setLoading(true); setData(null); setErrors([]);
@@ -5104,9 +5123,9 @@ export default function Page() {
     let cur = [...init]; setSteps(cur);
     const upd = (i: number, s: StepItem["status"]) => { cur = cur.map((x, j) => j === i ? { ...x, status: s } : x); setSteps([...cur]); };
     const errs: string[] = [], result: Partial<ResultData> = {}; let si = 0;
-    if (gh) { upd(si, "active"); try { const r = await fetch(`/api/proxy/analyze/${gh.trim()}?v=${Date.now()}`); const t = await r.text(); if (!r.headers.get("content-type")?.includes("json")) throw new Error(t.slice(0, 200)); const j = JSON.parse(t); if (j.error) throw new Error(j.error); result.github = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`GitHub: ${e instanceof Error ? e.message : String(e)}`); } si++; }
-    if (lc) { upd(si, "active"); try { const r = await fetch(`/api/proxy/leetcode/${lc.trim()}?v=${Date.now()}`); const t = await r.text(); if (!r.headers.get("content-type")?.includes("json")) throw new Error(t.slice(0, 200)); const j = JSON.parse(t); if (j.error) throw new Error(j.error); result.leetcode = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`LeetCode: ${e instanceof Error ? e.message : String(e)}`); } si++; }
-    if (cf) { upd(si, "active"); try { const r = await fetch(`/api/proxy/codeforces/${cf.trim()}?v=${Date.now()}`); const t = await r.text(); if (!r.headers.get("content-type")?.includes("json")) throw new Error(t.slice(0, 200)); const j = JSON.parse(t); if (j.error) throw new Error(j.error); result.codeforces = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`Codeforces: ${e instanceof Error ? e.message : String(e)}`); } }
+    if (gh) { upd(si, "active"); try { result.github = await fetchApi(`/analyze/${gh.trim()}`); upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`GitHub: ${e instanceof Error ? e.message : String(e)}`); } si++; }
+    if (lc) { upd(si, "active"); try { result.leetcode = await fetchApi(`/leetcode/${lc.trim()}`); upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`LeetCode: ${e instanceof Error ? e.message : String(e)}`); } si++; }
+    if (cf) { upd(si, "active"); try { result.codeforces = await fetchApi(`/codeforces/${cf.trim()}`); upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`Codeforces: ${e instanceof Error ? e.message : String(e)}`); } }
     
     // Calculate advanced GitHub analytics if GitHub data is available
     if (gh && result.github?.repositories) {
