@@ -30,6 +30,7 @@ except Exception as e:
 
 from github import fetch_github_data
 from leetcode import fetch_leetcode_data
+from codeforces import fetch_codeforces_data
 from analytics import calculate_skill_score
 
 app = FastAPI()
@@ -37,7 +38,7 @@ app = FastAPI()
 # allow_origins cannot be '*' when credentials=True; specify the
 # frontend origin(s) explicitly. You can set FRONTEND_ORIGINS to a
 # comma-separated list of allowed origins (e.g. http://localhost:3000).
-front = os.environ.get("FRONTEND_ORIGINS", "http://localhost:3000,https://deviq.online,https://www.deviq.online,https://developerintelligencedashboard.web.app")
+front = os.environ.get("FRONTEND_ORIGINS", "http://localhost:3000,https://deviq.online,https://www.deviq.online,https://deviq-pi.vercel.app,https://developerintelligencedashboard.web.app")
 allow_list = [o.strip() for o in front.split(",") if o.strip()]
 print(f"✅ CORS allowed origins: {allow_list}")
 
@@ -397,18 +398,14 @@ def leetcode_analyze(username: str):
 
 @app.get("/codeforces/{username}")
 def codeforces_analyze(username: str):
-    """Fetch Codeforces profile data for a user"""
-    # Placeholder: return mock Codeforces data
-    # In production, this would fetch from Codeforces API
-    return {
-        "username": username,
-        "rating": 1400,
-        "max_rating": 1500,
-        "rank": "Expert",
-        "max_rank": "Expert",
-        "problems_solved": 250,
-        "contest_count": 20
-    }
+    """Fetch real Codeforces profile data for a user via the Codeforces API."""
+    data = fetch_codeforces_data(username)
+    if not data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Codeforces user '{username}' not found or data unavailable",
+        )
+    return data
 
 
 # ─────────────────────────────────────────────────
