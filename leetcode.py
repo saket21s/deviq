@@ -34,6 +34,17 @@ query userContestRankingInfo($username: String!) {
 }
 """
 
+# A query for the user's most recent accepted (solved) submissions.
+_RECENT_AC_QUERY = """
+query recentAcSubmissions($username: String!, $limit: Int!) {
+  recentAcSubmissionList(username: $username, limit: $limit) {
+    title
+    titleSlug
+    timestamp
+  }
+}
+"""
+
 _HEADERS = {
     "Content-Type": "application/json",
     # LeetCode rejects requests without a browser-like Referer / User-Agent.
@@ -46,11 +57,14 @@ _HEADERS = {
 }
 
 
-def _post(query: str, username: str) -> Optional[Dict[str, Any]]:
+def _post(query: str, username: str, extra_vars: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Run a GraphQL query against LeetCode and return the `data` object."""
+    variables: Dict[str, Any] = {"username": username}
+    if extra_vars:
+        variables.update(extra_vars)
     resp = requests.post(
         LEETCODE_GRAPHQL_URL,
-        json={"query": query, "variables": {"username": username}},
+        json={"query": query, "variables": variables},
         headers=_HEADERS,
         timeout=15,
     )
@@ -116,5 +130,27 @@ def fetch_leetcode_data(username: str) -> Optional[Dict[str, Any]]:
             result["top_percentage"] = contest.get("topPercentage")
     except Exception as e:
         print(f"Error fetching LeetCode contest data for {username}: {e}")
+
+    # Best-effort list of recently solved problems (non-fatal if it fails).
+    try:
+        recent_data = _post(_RECENT_AC_QUERY, username, {"limit": 30})
+        submissions = (recent_data or {}).get("recentAcSubmissionList") or []
+        seen = set()
+        recent_solved = []
+        for sub in submissions:
+            slug = sub.get("titleSlug")
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            ts = sub.get("timestamp")
+            recent_solved.append({
+                "title": sub.get("title", slug),
+                "url": f"https://leetcode.com/problems/{slug}/",
+                "timestamp": int(ts) if ts is not None else None,
+            })
+        result["recent_solved"] = recent_solved[:30]
+    except Exception as e:
+        print(f"Error fetching LeetCode recent submissions for {username}: {e}")
+        result["recent_solved"] = []
 
     return result

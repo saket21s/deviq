@@ -1081,25 +1081,6 @@ function RepoCard({ repo, tk, gh }: { repo: RepoItem; tk: Theme; gh: string }) {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
 const LEVEL_MAP: Record<string, number> = { NONE: 0, FIRST_QUARTILE: 1, SECOND_QUARTILE: 2, THIRD_QUARTILE: 3, FOURTH_QUARTILE: 4 };
-const GQL = `query($login:String!){user(login:$login){contributionsCollection{contributionCalendar{totalContributions weeks{contributionDays{date contributionCount contributionLevel}}}}}}`;
-
-async function fetchHeatmap(username: string, token: string): Promise<HeatmapData> {
-  const r = await fetch("https://api.github.com/graphql", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}`, "User-Agent": "DevIQ/1.0" }, body: JSON.stringify({ query: GQL, variables: { login: username } }) });
-  if (!r.ok) throw new Error(`GitHub API ${r.status}`);
-  const b = await r.json();
-  if (b.errors?.length) throw new Error(b.errors[0].message);
-  if (!b.data?.user) throw new Error(`User "${username}" not found`);
-  const cal = b.data.user.contributionsCollection.contributionCalendar;
-  const contributions: Contribution[] = [];
-  for (const w of cal.weeks) for (const d of w.contributionDays) contributions.push({ date: d.date, count: d.contributionCount, level: LEVEL_MAP[d.contributionLevel] ?? 0 });
-  contributions.sort((a, b) => a.date.localeCompare(b.date));
-  let longest = 0, temp = 0;
-  for (const d of contributions) { if (d.count > 0) { temp++; longest = Math.max(longest, temp); } else temp = 0; }
-  const today = new Date().toISOString().split("T")[0];
-  const days = contributions.at(-1)?.date === today && contributions.at(-1)?.count === 0 ? contributions.slice(0, -1) : contributions;
-  let current = 0; for (let i = days.length - 1; i >= 0; i--) { if (days[i].count > 0) current++; else break; }
-  return { contributions, total_last_year: cal.totalContributions, current_streak: current, longest_streak: longest };
-}
 
 function buildGrid(contributions: Contribution[]) {
   const map: Record<string, Contribution> = {};
@@ -1137,43 +1118,24 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
       setHdata(null);
 
       try {
-        const r = await fetch(`${BACKEND}/contributions/${encodeURIComponent(username)}`);
+        const r = await fetch(`/api/github/contributions/${encodeURIComponent(username)}`);
         const body = await r.json().catch(() => null);
 
         if (!r.ok) {
-          const detail = body?.detail || body?.error || `HTTP ${r.status}`;
+          const detail = body?.error || body?.detail || `HTTP ${r.status}`;
           throw new Error(detail);
         }
 
         if (!body?.contributions || !Array.isArray(body.contributions)) {
-          throw new Error('Contribution data unavailable from backend');
+          throw new Error("Contribution data unavailable");
         }
 
         if (!cancelled) setHdata(body as HeatmapData);
-      } catch (backendErr: unknown) {
-        const githubToken = process.env.NEXT_PUBLIC_GITHUB_TOKEN || "";
-
-        if (githubToken) {
-          try {
-            const fallback = await fetchHeatmap(username, githubToken);
-            if (!cancelled) setHdata(fallback);
-            return;
-          } catch (fallbackErr: unknown) {
-            const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-            if (!cancelled) {
-              setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: msg });
-            }
-            return;
-          }
-        }
-
-        const msg = backendErr instanceof Error ? backendErr.message : String(backendErr);
-        if (!cancelled) {
-          setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: msg });
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!cancelled) setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: msg });
       }
+      if (!cancelled) setLoading(false);
     };
 
     loadContributions();
@@ -3253,6 +3215,9 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
       console.log("[DevIQ] API endpoint:", url);
       const res = await fetch(url);
       if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error("Company-specific problem lists are being updated. Try again later.");
+        }
         const errBody = await res.json().catch(() => null);
         const detail = errBody?.error || errBody?.detail || `Server returned ${res.status}`;
         throw new Error(detail);
