@@ -3253,6 +3253,9 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
       console.log("[DevIQ] API endpoint:", url);
       const res = await fetch(url);
       if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error("Company-specific problem lists are being updated. Try again later.");
+        }
         const errBody = await res.json().catch(() => null);
         const detail = errBody?.error || errBody?.detail || `Server returned ${res.status}`;
         throw new Error(detail);
