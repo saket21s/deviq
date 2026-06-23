@@ -138,7 +138,6 @@ export async function exchangeCodeForToken(
   const res = await fetch(`${API}/auth/oauth`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    credentials: "include",
     body: JSON.stringify({
       code,
       redirect_uri: redirectUri,

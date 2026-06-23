@@ -27,9 +27,6 @@ import {
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
-// API base: Render backend URL
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com' 
-
 // Secrets removed - these operations should be done via backend API
 // const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
 // const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
@@ -66,10 +63,12 @@ interface LeetcodeData {
   total_solved: number; easy_solved: number; medium_solved: number; hard_solved: number;
   ranking?: number; contest_rating?: number; contests_attended?: number;
   top_percentage?: number; badges?: number;
+  recent_solved?: { title: string; url: string; timestamp?: number | null }[];
 }
 interface CodeforcesData {
   rating: number; max_rating?: number; rank?: string; max_rank?: string;
   problems_solved?: number; contests_participated?: number; contribution?: number;
+  recent_solved?: { name: string; url: string; rating?: number | null; timestamp?: number | null }[];
 }
 interface ResultData {
   github?: GithubData; leetcode?: LeetcodeData; codeforces?: CodeforcesData;
@@ -263,7 +262,7 @@ function normalizeAvatarUrl(url?: string): string | undefined {
   if (!raw) return undefined;
   if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
   try {
-    return new URL(raw, API).toString();
+    return new URL(raw, "/api/proxy").toString();
   } catch {
     return raw;
   }
@@ -317,18 +316,14 @@ function cacheAuthUser(user: AuthUser) {
 }
 
 // -----------------------------------------------------------------------------
-// Server API helpers (credentials included) and optional local-storage fallback
+// Server API helpers — uses Next.js proxy route to avoid CORS
 // -----------------------------------------------------------------------------
 async function serverRequest(path: string, opts: RequestInit = {}) {
-  opts.credentials = "include";
-
-  // Add Authorization header from localStorage if available
   const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
   const sessionUser = typeof window !== 'undefined' ? loadSession() : null;
   const fallbackEmail = sessionUser?.email?.trim();
   const headersObj = (opts.headers || {}) as Record<string, string>;
   if (authToken) {
-    console.log(`🔑 Using auth token: ${authToken.substring(0, 20)}...${authToken.substring(authToken.length - 10)}`);
     opts.headers = {
       ...headersObj,
       'Authorization': `Bearer ${authToken}`,
@@ -337,7 +332,6 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
       (opts.headers as Record<string, string>)['x-user-email'] = fallbackEmail;
     }
   } else {
-    console.warn('⚠️ No auth token found in localStorage - request will be unauthenticated');
     if (fallbackEmail) {
       opts.headers = {
         ...headersObj,
@@ -346,26 +340,19 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
     }
   }
 
-  // helper that actually executes a fetch and throws on bad status
-  const doFetch = async (base: string) => {
-    console.log(`🌐 API Request: ${base}${path}`, { 
-      method: opts.method || 'GET',
-      credentials: opts.credentials,
-      headers: opts.headers,
-      hasAuthToken: !!authToken
-    });
+  const base = "/api/proxy";
+  console.log(`🌐 API Request: ${base}${path}`, {
+    method: opts.method || 'GET',
+    hasAuthToken: !!authToken
+  });
+
+  try {
     const r = await fetch(`${base}${path}`, opts);
-    console.log(`📡 API Response: ${r.status} ${r.statusText}`);
-    
-    // Handle 304 Not Modified - data hasn't changed
-    if (r.status === 304) {
-      console.log('📦 304 Not Modified - using cached data');
-      return null; // Caller should use cached data
-    }
-    
+
+    if (r.status === 304) return null;
+
     if (!r.ok) {
       const t = await r.text();
-      // Suppress expected 401s during auth/profile fallback flow
       const suppress401 = r.status === 401 && (
         path.includes('/auth/me') ||
         path.includes('/profile') ||
@@ -375,62 +362,25 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
       if (!suppress401 && !suppressLogout) {
         console.error(`API Error: ${r.status} ${r.statusText} on ${path}`);
       }
-      if (r.status === 401) {
-        console.warn(`🔒 Not authenticated. Please log in through the UI first!`);
-      }
       const error: any = new Error(t || r.statusText);
       error.status = r.status;
       error.path = path;
       throw error;
     }
-    
-    // Parse JSON with better error handling
+
     const text = await r.text();
-    if (!text || text.trim() === '') {
-      console.warn(`⚠️ Empty response from ${path}`);
-      return null;
-    }
-    
+    if (!text || text.trim() === '') return null;
+
     try {
       return JSON.parse(text);
     } catch (jsonErr: any) {
-      console.error(`❌ JSON Parse Error on ${path}:`, jsonErr.message);
-      const preview = text.substring(0, 500);
-      console.error(`📄 Response preview (first 500 chars):`, preview);
+      console.error(`JSON Parse Error on ${path}:`, jsonErr.message);
       throw new Error(`Invalid JSON response from server: ${jsonErr.message}`);
     }
-  };
-
-  const isLocalFrontend = typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-
-  // If NEXT_PUBLIC_API_BASE_URL is explicitly set and it's a production URL, don't add localhost fallbacks
-  const isProductionAPI = API && API.includes('onrender.com');
-  
-  const candidateBases = [API];
-  if (isLocalFrontend && !isProductionAPI) {
-    candidateBases.push("http://localhost:8000", "http://127.0.0.1:8000");
+  } catch (err: any) {
+    if (err && typeof err === 'object' && 'status' in err) throw err;
+    throw new Error(`Failed to reach backend for ${path}`);
   }
-
-  const tried = new Set<string>();
-  let lastError: any = null;
-
-  for (const base of candidateBases) {
-    if (!base || tried.has(base)) continue;
-    tried.add(base);
-    try {
-      return await doFetch(base);
-    } catch (err: any) {
-      // HTTP errors are real API responses; don't hop hosts for these.
-      if (err && typeof err === 'object' && 'status' in err) {
-        throw err;
-      }
-      lastError = err;
-      console.warn(`⚠️ Network fetch failed for ${base}${path}; trying next candidate.`);
-    }
-  }
-
-  throw lastError || new Error(`Failed to reach backend for ${path}`);
 }
 
 async function apiSignup(name: string, email: string, password: string, avatar?: string, provider?: string): Promise<AuthUser> {
@@ -521,7 +471,7 @@ async function apiGmailLogin(user?: { name?: string; email?: string; avatar?: st
     const email = (user?.email || "").trim();
     if (!email) return null;
 
-    const response = await fetch(`${API}/auth/gmail/login`, {
+    const response = await fetch(`/api/proxy/auth/gmail/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -912,7 +862,7 @@ function EyeIcon({ open, color = "currentColor" }: { open: boolean; color?: stri
 function useBreakpoint() {
   const [w, setW] = useState(1200);
   useEffect(() => { const u = () => setW(window.innerWidth); u(); window.addEventListener("resize", u); return () => window.removeEventListener("resize", u); }, []);
-  return { isMobile: w < 640, isTablet: w < 960 };
+  return { isMobile: w < 640, isTablet: w < 1025 };
 }
 function useCounter(target: number, duration = 1400): number {
   const [v, setV] = useState(0);
@@ -965,6 +915,62 @@ function StatRow({ label, value, accent, tk, stripe }: { label: string; value: s
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 18px", background: stripe ? tk.bgAlt : "transparent", borderBottom: `1px solid ${tk.border}` }}>
       <span style={{ fontSize: 12, color: tk.text2, fontWeight: 400 }}>{label}</span>
       <span style={{ fontSize: 12, fontWeight: 500, color: accent || tk.text, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em" }}>{value ?? "—"}</span>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────
+   RECENTLY SOLVED LIST
+───────────────────────────────────────────────── */
+function RecentSolvedList({ title, handle, items, tk, accent, accentLight, accentBorder, platform }: {
+  title: string; handle?: string;
+  items: { title: string; url: string; meta?: string; date?: string }[];
+  tk: Theme; accent: string; accentLight: string; accentBorder: string;
+  platform: "leetcode" | "codeforces";
+}) {
+  return (
+    <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: tk.shadow }}>
+      <div style={{ padding: "12px 16px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <PlatformIcon platform={platform} size={15} color={accent} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: tk.text, letterSpacing: "-0.01em" }}>{title}</span>
+          {handle && <span style={{ fontSize: 11, color: tk.text3 }}>· {handle}</span>}
+        </div>
+        <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" as const, padding: "3px 8px", borderRadius: 20, border: `1px solid ${accentBorder}`, color: accent, background: accentLight }}>
+          {items.length} solved
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 120, color: tk.text3, fontSize: 13, padding: 20, textAlign: "center" as const }}>
+          No recent solved problems found.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", maxHeight: 360, overflowY: "auto" as const }}>
+          {items.map((it, i) => (
+            <a
+              key={`${it.url}-${i}`}
+              href={it.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "flex", alignItems: "center", gap: 10, textDecoration: "none",
+                padding: "10px 16px", borderBottom: i < items.length - 1 ? `1px solid ${tk.border}` : "none",
+                background: i % 2 === 0 ? "transparent" : tk.bgAlt, transition: "background 0.12s",
+              }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 600, color: tk.text3, fontVariantNumeric: "tabular-nums" as const, minWidth: 20, textAlign: "right" as const }}>{i + 1}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: tk.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{it.title}</div>
+                {it.date && <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{it.date}</div>}
+              </div>
+              {it.meta && (
+                <span style={{ fontSize: 11, fontWeight: 600, color: accent, background: accentLight, border: `1px solid ${accentBorder}`, borderRadius: 5, padding: "2px 7px", flexShrink: 0, whiteSpace: "nowrap" as const }}>{it.meta}</span>
+              )}
+              <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2" style={{ flexShrink: 0 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1127,10 +1133,8 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
       setLoading(true);
       setHdata(null);
 
-      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
-
       try {
-        const r = await fetch(`${API}/contributions/${encodeURIComponent(username)}`, { credentials: 'include' });
+        const r = await fetch(`/api/proxy/contributions/${encodeURIComponent(username)}`);
         const body = await r.json().catch(() => null);
 
         if (!r.ok) {
@@ -1431,10 +1435,8 @@ Combined DevIQ Score: ${data.combined_score}/100`;
   const call = async (m: AIMode) => {
     setLoading(m);
     try {
-      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
-      const response = await fetch(`${API}/ai/insights`, {
+      const response = await fetch(`/api/proxy/ai/insights`, {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: PROMPTS[m] })
       });
@@ -1463,10 +1465,8 @@ Combined DevIQ Score: ${data.combined_score}/100`;
     if (translated[mode]) { setShowHindi(s => ({ ...s, [mode]: !s[mode] })); return; }
     setTranslating(true);
     try {
-      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
-      const response = await fetch(`${API}/ai/insights`, {
+      const response = await fetch(`/api/proxy/ai/insights`, {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: `Translate the following text to Hindi. Keep formatting (bold markers **, bullet points •) intact. Only translate the text:\n\n${current}` })
       });
@@ -1616,9 +1616,9 @@ function CompareMode({ tk, isMobile, onComparison }: { tk: Theme; isMobile: bool
   useEffect(() => { try { if (dataB) sessionStorage.setItem("deviq_cmpDataB", JSON.stringify(dataB)); else sessionStorage.removeItem("deviq_cmpDataB"); } catch { } }, [dataB]);
   const fetchDev = async (f: { gh: string; lc: string; cf: string }, set: (d: ResultData) => void, setL: (b: boolean) => void) => {
     setL(true); const r: Partial<ResultData> = {};
-    if (f.gh) { try { const res = await fetch(`${API}/analyze/${f.gh.trim()}?v=${Date.now()}`); const j = await res.json(); if (res.ok && !j.error) r.github = j; } catch { } }
-    if (f.lc) { try { const res = await fetch(`${API}/leetcode/${f.lc.trim()}?v=${Date.now()}`); const j = await res.json(); if (res.ok && !j.error) r.leetcode = j; } catch { } }
-    if (f.cf) { try { const res = await fetch(`${API}/codeforces/${f.cf.trim()}?v=${Date.now()}`); const j = await res.json(); if (res.ok && !j.error) r.codeforces = j; } catch { } }
+    if (f.gh) { try { const res = await fetch(`/api/proxy/analyze/${f.gh.trim()}?v=${Date.now()}`); const j = await res.json(); if (res.ok && !j.error) r.github = j; } catch { } }
+    if (f.lc) { try { const res = await fetch(`/api/proxy/leetcode/${f.lc.trim()}?v=${Date.now()}`); const j = await res.json(); if (res.ok && !j.error) r.leetcode = j; } catch { } }
+    if (f.cf) { try { const res = await fetch(`/api/proxy/codeforces/${f.cf.trim()}?v=${Date.now()}`); const j = await res.json(); if (res.ok && !j.error) r.codeforces = j; } catch { } }
     let s = 0; if (r.github?.analytics?.skill_score) s += r.github.analytics.skill_score * 0.4; if (r.leetcode?.total_solved) s += Math.min(100, r.leetcode.easy_solved + r.leetcode.medium_solved * 3 + r.leetcode.hard_solved * 6) * 0.35; if (r.codeforces?.rating) s += Math.min(100, r.codeforces.rating / 35) * 0.25;
     r.combined_score = Math.round(s * 10) / 10; set(r as ResultData); setL(false);
   };
@@ -2397,6 +2397,7 @@ function ProfilePage({
   profile, 
   tk, 
   isMobile, 
+  dark,
   onNavigate,
   connectedAccounts,
   connectingPlatform,
@@ -2415,6 +2416,7 @@ function ProfilePage({
   profile: UserProfile | null; 
   tk: Theme; 
   isMobile: boolean; 
+  dark: boolean;
   onNavigate: (p: Page) => void;
   connectedAccounts: ConnectedAccount[];
   connectingPlatform: string | null;
@@ -2430,13 +2432,17 @@ function ProfilePage({
   onDisconnectAccount: (platform: string) => void;
 }) {
   const [avatarFailed, setAvatarFailed] = useState(false);
-  
+  const [showAllRecent, setShowAllRecent] = useState(false);
+
   // Reset avatarFailed when user changes
   useEffect(() => {
     setAvatarFailed(false);
   }, [user.email, user.avatar]);
   
   const p = profile;
+  const recentAnalyses = p?.recentAnalyses || [];
+  const displayedAnalyses = showAllRecent ? recentAnalyses : recentAnalyses.slice(0, 5);
+  const hasMore = recentAnalyses.length > 5;
   const joinDate = p?.joinedAt ? new Date(p.joinedAt).toLocaleDateString("en-US", { month: "long", year: "numeric" }) : "—";
   const providerColors: Record<string, string> = { github: "#24292e", google: "#4285F4", email: tk.blue };
   const providerColor = providerColors[user.provider || "email"] || tk.blue;
@@ -2642,9 +2648,9 @@ function ProfilePage({
           <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
             <div style={{ padding: "12px 18px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3 }}>Recent Analyses</span>
-              {(p?.recentAnalyses?.length ?? 0) > 0 && <span style={{ fontSize: 11, color: tk.text3 }}>{p!.recentAnalyses!.length} total</span>}
+              {recentAnalyses.length > 0 && <span style={{ fontSize: 11, color: tk.text3 }}>{recentAnalyses.length} total</span>}
             </div>
-            {(!p?.recentAnalyses || p.recentAnalyses.length === 0) ? (
+            {recentAnalyses.length === 0 ? (
               <div style={{ padding: "32px 18px", textAlign: "center" as const }}>
                 <div style={{ width: 44, height: 44, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 12px", fontSize: 18, color: tk.text3 }}>◎</div>
                 <div style={{ fontSize: 13, color: tk.text3, marginBottom: 14, lineHeight: 1.5 }}>No analyses yet.<br />Run one to track your history.</div>
@@ -2652,15 +2658,15 @@ function ProfilePage({
               </div>
             ) : (
               <div>
-                {p!.recentAnalyses!.map((rec, i) => {
+                {displayedAnalyses.map((rec, i) => {
                   const d = new Date(rec.date);
                   const scoreColor = rec.score >= 70 ? tk.green : rec.score >= 40 ? tk.amber : tk.rose;
                   const scoreBg = rec.score >= 70 ? tk.greenLight : rec.score >= 40 ? tk.amberLight : tk.roseLight;
                   const scoreBorder = rec.score >= 70 ? tk.greenBorder : rec.score >= 40 ? tk.amberBorder : tk.roseBorder;
                   return (
-                    <div key={rec.id} style={{ padding: "14px 18px", borderBottom: i < p!.recentAnalyses!.length - 1 ? `1px solid ${tk.border}` : "none", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
+                    <div key={rec.id} style={{ padding: "14px 18px", borderBottom: i < displayedAnalyses.length - 1 ? `1px solid ${tk.border}` : "none", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
                           <div style={{ width: 7, height: 7, borderRadius: "50%", background: tk.blue, flexShrink: 0 }} />
                           <span style={{ fontSize: 12, fontWeight: 600, color: tk.text }}>{d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span>
                           <span style={{ fontSize: 11, color: tk.text3 }}>{d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}</span>
@@ -2682,6 +2688,11 @@ function ProfilePage({
                     </div>
                   );
                 })}
+                {hasMore && !showAllRecent && (
+                  <div style={{ padding: "10px 18px", borderTop: `1px solid ${tk.border}`, display: "flex", justifyContent: "center" }}>
+                    <button onClick={() => setShowAllRecent(true)} style={{ fontSize: 12, color: tk.blue, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", fontWeight: 500 }}>Load More ({recentAnalyses.length - 5} remaining) →</button>
+                  </div>
+                )}
                 <div style={{ padding: "10px 18px", borderTop: `1px solid ${tk.border}`, display: "flex", justifyContent: "center" }}>
                   <button onClick={() => onNavigate("analyze")} style={{ fontSize: 12, color: tk.blue, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", fontWeight: 500 }}>Run New Analysis →</button>
                 </div>
@@ -2870,10 +2881,8 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
         messages.slice(-10).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') +
         "\nUser: " + userMessage.content + "\nAssistant:";
 
-      const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://developer-portfolio-backend-bu76.onrender.com';
-      const response = await fetch(`${API}/ai/insights`, {
+      const response = await fetch(`/api/proxy/ai/insights`, {
         method: 'POST',
-        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: fullPrompt })
       });
@@ -3056,7 +3065,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
       try {
         // Attempt to use backend API
-        const res = await fetch(`${API}/analyze?leetcode=${encodeURIComponent(username)}`);
+        const res = await fetch(`/api/proxy/analyze?leetcode=${encodeURIComponent(username)}`);
         if (res.ok) {
           const data = await res.json();
           if (data.leetcode) {
@@ -3213,7 +3222,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
     // Then try to fetch from API for any updates
     (async () => {
       try {
-        const res = await fetch(`${API}/leetcode/companies`);
+        const res = await fetch(`/api/proxy/leetcode/companies`);
         if (res.ok) {
           const data = await res.json();
           if (data.companies && data.companies.length > 0) {
@@ -3237,7 +3246,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
     setCompanyData(null);
     setCompanyError(null);
     try {
-      const url = `${API}/leetcode/company-problems/${slug}`;
+      const url = `/api/proxy/leetcode/company-problems/${slug}`;
       console.log("[DevIQ] API endpoint:", url);
       const res = await fetch(url);
       if (!res.ok) {
@@ -4176,8 +4185,18 @@ function SettingsPage({
     </div>
   );
   const Toggle = ({ on, onChange }: { on: boolean; onChange: () => void }) => (
-    <button onClick={onChange} style={{ width: 40, height: 22, borderRadius: 11, border: "none", background: on ? tk.blue : tk.track, cursor: "pointer", position: "relative" as const, transition: "background 0.2s", flexShrink: 0 }}>
-      <div style={{ position: "absolute" as const, top: 3, left: on ? 21 : 3, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" }} />
+    <button onClick={onChange} style={{
+      width: 40, height: 22, borderRadius: 11,
+      border: on ? "none" : (dark ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(0,0,0,0.12)"),
+      background: on ? tk.blue : (dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)"),
+      backdropFilter: on ? "none" : "blur(12px) saturate(180%)",
+      WebkitBackdropFilter: on ? "none" : "blur(12px) saturate(180%)",
+      boxShadow: on ? "inset 0 1px 0 rgba(255,255,255,0.25)" : (dark ? "inset 0 0.5px 0 rgba(255,255,255,0.04)" : "inset 0 0.5px 0 rgba(0,0,0,0.08)"),
+      cursor: "pointer", position: "relative" as const,
+      transition: "background 0.3s cubic-bezier(0.32,0.72,0,1), box-shadow 0.3s ease",
+      flexShrink: 0
+    }}>
+      <div style={{ position: "absolute" as const, top: on ? 3 : 2, left: on ? 21 : 2, width: on ? 16 : 18, height: on ? 16 : 18, borderRadius: "50%", background: dark ? "#fff" : "#1a1a1a", transition: "left 0.3s cubic-bezier(0.32,0.72,0,1), width 0.3s cubic-bezier(0.32,0.72,0,1), height 0.3s cubic-bezier(0.32,0.72,0,1), top 0.3s cubic-bezier(0.32,0.72,0,1)", boxShadow: "0 1px 4px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.6)" }} />
     </button>
   );
 
@@ -4342,6 +4361,7 @@ export default function Page() {
 
   const navigate = useCallback((to: Page, replace = false) => {
     setPage(to); setMenuOpen(false); setUserMenuOpen(false);
+    if (to === "home") window.scrollTo({ top: 0, behavior: "smooth" });
     const url = to === "home" ? "/" : `/${to}`;
     if (replace) window.history.replaceState({ page: to }, "", url);
     else window.history.pushState({ page: to }, "", url);
@@ -5084,9 +5104,9 @@ export default function Page() {
     let cur = [...init]; setSteps(cur);
     const upd = (i: number, s: StepItem["status"]) => { cur = cur.map((x, j) => j === i ? { ...x, status: s } : x); setSteps([...cur]); };
     const errs: string[] = [], result: Partial<ResultData> = {}; let si = 0;
-    if (gh) { upd(si, "active"); try { const r = await fetch(`${API}/analyze/${gh.trim()}?v=${Date.now()}`); const j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); result.github = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`GitHub: ${e instanceof Error ? e.message : String(e)}`); } si++; }
-    if (lc) { upd(si, "active"); try { const r = await fetch(`${API}/leetcode/${lc.trim()}?v=${Date.now()}`); const j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); result.leetcode = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`LeetCode: ${e instanceof Error ? e.message : String(e)}`); } si++; }
-    if (cf) { upd(si, "active"); try { const r = await fetch(`${API}/codeforces/${cf.trim()}?v=${Date.now()}`); const j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); result.codeforces = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`Codeforces: ${e instanceof Error ? e.message : String(e)}`); } }
+    if (gh) { upd(si, "active"); try { const r = await fetch(`/api/proxy/analyze/${gh.trim()}?v=${Date.now()}`); const j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); result.github = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`GitHub: ${e instanceof Error ? e.message : String(e)}`); } si++; }
+    if (lc) { upd(si, "active"); try { const r = await fetch(`/api/proxy/leetcode/${lc.trim()}?v=${Date.now()}`); const j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); result.leetcode = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`LeetCode: ${e instanceof Error ? e.message : String(e)}`); } si++; }
+    if (cf) { upd(si, "active"); try { const r = await fetch(`/api/proxy/codeforces/${cf.trim()}?v=${Date.now()}`); const j = await r.json(); if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`); result.codeforces = j; upd(si, "done"); } catch (e: unknown) { upd(si, "error"); errs.push(`Codeforces: ${e instanceof Error ? e.message : String(e)}`); } }
     
     // Calculate advanced GitHub analytics if GitHub data is available
     if (gh && result.github?.repositories) {
@@ -5164,7 +5184,41 @@ export default function Page() {
   const sColor = (s: StepItem["status"]) => s === "active" ? tk.blue : s === "done" ? tk.green : s === "error" ? tk.rose : tk.text3;
   const px = isMobile ? "16px" : "32px";
   const navLinks = data && page === "analyze" ? [{ label: "Score", id: "sec-score" }, { label: "Platforms", id: "sec-platforms" }, { label: "AI", id: "sec-ai" }, { label: "Activity", id: "sec-heatmap" }, { label: "Role", id: "sec-role" }, { label: "Repos", id: "sec-repos" }] : [];
-  const scroll = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" }); setMenuOpen(false); };
+  const showSections = navLinks.length > 0;
+  const [navSections, setNavSections] = useState<{ label: string; id: string }[]>([]);
+  useEffect(() => { if (showSections) setNavSections(navLinks); }, [showSections]); // keep last set while collapsing for a smooth close
+  const [activeSection, setActiveSection] = useState<string>("");
+  const scrollLockRef = useRef(0);
+  useEffect(() => {
+    if (!(data && page === "analyze")) { setActiveSection(""); return; }
+    const ids = ["sec-score", "sec-platforms", "sec-ai", "sec-heatmap", "sec-role", "sec-repos"];
+    const offset = 110; // navbar height + breathing room
+    let raf = 0;
+    const compute = () => {
+      raf = 0;
+      if (Date.now() < scrollLockRef.current) return; // a nav click set the section; don't override mid-scroll
+      // Bottom of page → last visible section wins.
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+        for (let i = ids.length - 1; i >= 0; i--) { if (document.getElementById(ids[i])) { setActiveSection(ids[i]); return; } }
+      }
+      let current = "";
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        if (el.getBoundingClientRect().top - offset <= 0) current = id; // section has reached the line
+      }
+      if (!current) { // nothing crossed yet → first existing section
+        current = ids.find(id => document.getElementById(id)) || "";
+      }
+      setActiveSection(current);
+    };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(compute); };
+    const t = setTimeout(compute, 150); // initial pass once results render
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => { clearTimeout(t); cancelAnimationFrame(raf); window.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); };
+  }, [page, data]);
+  const scroll = (id: string) => { const el = document.getElementById(id); if (!el) return; setActiveSection(id); scrollLockRef.current = Date.now() + 850; el.scrollIntoView({ behavior: "smooth", block: "start" }); setMenuOpen(false); };
   const tagS = (c: string, bg: string, b: string): CSSProperties => ({ fontSize: 11, fontWeight: 500, letterSpacing: "0.03em", padding: "3px 9px", borderRadius: 5, border: `1px solid ${b}`, color: c, background: bg, whiteSpace: "nowrap" as const });
 
   if (!hydrated) {
@@ -5180,20 +5234,24 @@ export default function Page() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap');
         *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-        html{scroll-behavior:smooth;font-size:17px;}
-        body{margin:0;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:15px;}
+        html{scroll-behavior:smooth;font-size:17px;overflow-x:hidden;}
+        body{margin:0;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:15px;overflow-x:hidden;}
         input,button,textarea{font-family:'Geist',system-ui,sans-serif;font-size:inherit;}
-        #sec-score,#sec-platforms,#sec-ai,#sec-heatmap,#sec-role,#sec-repos{scroll-margin-top:60px;}
+        #sec-score,#sec-platforms,#sec-ai,#sec-heatmap,#sec-role,#sec-repos{scroll-margin-top:78px;}
         @keyframes spin{to{transform:rotate(360deg);}}
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
         @keyframes shimmer{0%,100%{opacity:1}50%{opacity:0.5}}
         @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
         @keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+        @keyframes expandDown{from{opacity:0;transform:translateY(-12px) scaleY(0.92)}to{opacity:1;transform:none}}
         @keyframes overlayIn{from{opacity:0}to{opacity:1}}
         @keyframes modalIn{from{opacity:0;transform:scale(0.95) translateY(10px)}to{opacity:1;transform:none}}
         .fu{animation:fadeUp 0.3s cubic-bezier(0.4,0,0.2,1) both;}
         .fu1{animation-delay:0.04s;}.fu2{animation-delay:0.08s;}.fu3{animation-delay:0.14s;}
         .slide-down{animation:slideDown 0.2s cubic-bezier(0.4,0,0.2,1) both;}
+        .expand-down{animation:expandDown 0.3s cubic-bezier(0.16,1,0.3,1) both;transform-origin:top center;}
+        @keyframes navExpand{from{opacity:0;max-width:0;transform:translateX(-8px)}to{opacity:1;max-width:560px;transform:none}}
+        .nav-expand{animation:navExpand 0.4s cubic-bezier(0.16,1,0.3,1) both;display:flex;align-items:center;gap:4px;overflow:hidden;white-space:nowrap;}
         input::placeholder{color:#A3A3A3;}
         ::selection{background:rgba(26,111,244,0.12);}
         a{text-decoration:none;}
@@ -5207,36 +5265,42 @@ export default function Page() {
         {authModal && <AuthModal mode={authModal} tk={tk} onAuth={handleLogin} onClose={() => setAuthModal(null)} onSwitchMode={() => setAuthModal(m => m === "login" ? "signup" : "login")} />}
 
         {/* NAVBAR */}
-        <nav suppressHydrationWarning style={{ position: "sticky", top: 0, zIndex: 200, background: dark ? "rgba(10,10,10,0.92)" : "rgba(245,245,245,0.92)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderBottom: `1px solid ${tk.border}`, overflow: "visible" }}>
-          <div style={{ maxWidth: 1100, margin: "0 auto", padding: `0 ${px}`, display: "flex", alignItems: "center", justifyContent: "space-between", height: 58 }}>
-            <button onClick={() => navigate("home")} style={{ fontSize: 14, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>DevIQ</button>
-            {!isMobile && (
-              <div style={{ display: "flex", alignItems: "center", gap: 1, flex: 1, paddingLeft: 20 }}>
+        <nav suppressHydrationWarning style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 200, background: "transparent", padding: isMobile ? "14px 12px 0" : isTablet ? "14px 16px 0" : "14px 96px 0 16px" }}>
+          <div style={{ position: "relative", maxWidth: 1200, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: isMobile ? 8 : isTablet ? 10 : 30, height: isMobile ? 56 : isTablet ? 56 : 50, padding: isMobile ? "0 8px 0 18px" : isTablet ? "0 12px 0 22px" : "0 8px 0 24px", margin: "0 auto", width: isMobile || isTablet ? "100%" : "auto", maxWidth: isMobile || isTablet ? "100%" : "fit-content", background: dark ? "rgba(26,26,26,0.72)" : "rgba(255,255,255,0.62)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", border: dark ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(255,255,255,0.85)", borderRadius: 999, boxShadow: dark ? "0 4px 20px rgba(0,0,0,0.4), inset 0 0.5px 0 rgba(255,255,255,0.05)" : "0 4px 20px rgba(0,0,0,0.04), inset 0 0.5px 0 rgba(255,255,255,0.72)", willChange: "width", backfaceVisibility: "hidden" }}>
+            <button onClick={() => navigate("home")} style={{ fontSize: isMobile ? 19 : isTablet ? 19 : 17, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0, display: "flex", alignItems: "center" }}>DevIQ<span style={{ color: tk.purple }}>.</span></button>
+            {!isMobile && !isTablet && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }] as { id: Page; label: string }[]).map(item => (
-                  <button key={item.id} onClick={() => navigate(item.id)} style={{ padding: "4px 11px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 12, fontWeight: page === item.id ? 600 : 400, color: page === item.id ? tk.text : tk.text2, background: page === item.id ? tk.surface : "transparent", transition: "all 0.12s" }}
-                    onMouseEnter={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.surface; } }}
+                  <button key={item.id} onClick={() => navigate(item.id)} style={{ padding: "7px 16px", borderRadius: 999, cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 500, color: page === item.id ? "#fff" : tk.text2, background: page === item.id ? (dark ? "rgba(255,255,255,0.16)" : "rgba(10,10,10,0.78)") : "transparent", backdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", WebkitBackdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", border: page === item.id ? `1px solid ${dark ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.22)"}` : "1px solid transparent", boxShadow: page === item.id ? "inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 14px rgba(0,0,0,0.28)" : "none", transition: "all 0.15s" }}
+                    onMouseEnter={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.bgAlt; } }}
                     onMouseLeave={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text2; (e.currentTarget as HTMLElement).style.background = "transparent"; } }}>
                     {item.label}
                   </button>
                 ))}
-                {navLinks.length > 0 && (<>
-                  <div style={{ width: 1, height: 16, background: tk.border, margin: "0 6px" }} />
-                  {navLinks.map(l => (
-                    <button key={l.id} onClick={() => scroll(l.id)} style={{ padding: "4px 10px", borderRadius: 5, border: "none", background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 400, color: tk.text3, transition: "color 0.12s, background 0.12s" }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.surface; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = tk.text3; (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
-                      {l.label}
-                    </button>
-                  ))}
-                </>)}
+                {navSections.length > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, overflow: "hidden", whiteSpace: "nowrap", maxWidth: showSections ? 500 : 0, opacity: showSections ? 1 : 0, transition: "max-width 0.35s ease, opacity 0.25s ease" }}>
+                    <div style={{ width: 1, height: 16, background: tk.border, margin: "0 6px", flexShrink: 0 }} />
+                    {navSections.map(l => {
+                      const isActive = l.id === activeSection;
+                      return (
+                      <button key={l.id} onClick={() => scroll(l.id)} style={{ padding: "7px 13px", borderRadius: 999, border: `1px solid ${isActive ? (dark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.06)") : "transparent"}`, background: isActive ? (dark ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.92)") : "transparent", backdropFilter: isActive ? "blur(8px) saturate(150%)" : "none", WebkitBackdropFilter: isActive ? "blur(8px) saturate(150%)" : "none", boxShadow: isActive ? (dark ? "0 0 14px rgba(255,255,255,0.12), inset 0 1px 0 rgba(255,255,255,0.16)" : "0 2px 12px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.8)") : "none", cursor: "pointer", fontSize: 13, fontWeight: isActive ? 600 : 500, color: isActive ? tk.text : tk.text3, transition: "all 0.18s", flexShrink: 0 }}
+                        onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.bgAlt; } }}
+                        onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = tk.text3; (e.currentTarget as HTMLElement).style.background = "transparent"; } }}>
+                        {l.label}
+                      </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
-            <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 7 }}>
-              {!isMobile && !user && (<>
-                <button onClick={() => setAuthModal("login")} style={{ padding: "5px 13px", borderRadius: 6, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 500, color: tk.text2, transition: "all 0.15s" }}>Log in</button>
-                <button onClick={() => setAuthModal("signup")} style={{ padding: "5px 13px", borderRadius: 6, border: "none", background: tk.accent, cursor: "pointer", fontSize: 12, fontWeight: 600, color: tk.accentFg }}>Sign up</button>
+            <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8 }}>
+              {!isMobile && !isTablet && !user && (<>
+                <button onClick={() => setAuthModal("login")} style={{ padding: "8px 16px", borderRadius: 999, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 500, color: tk.text2, transition: "all 0.15s" }}>Log in</button>
+                <button onClick={() => setAuthModal("signup")} style={{ padding: "8px 18px", borderRadius: 999, border: "none", background: tk.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, color: tk.accentFg }}>Sign up</button>
               </>)}
-              {!isMobile && user && (
+              {!isMobile && !isTablet && user && (
                 <div ref={userMenuRef} style={{ position: "relative" }}>
                   <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
                     {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
@@ -5267,17 +5331,17 @@ export default function Page() {
                   )}
                 </div>
               )}
-              {isMobile && !user && (
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  <button className="nav-auth-btn" onClick={() => setAuthModal("login")} style={{ padding: "5px 11px", borderRadius: 6, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 500, color: tk.text2 }}>Log in</button>
-                  <button className="nav-auth-btn" onClick={() => setAuthModal("signup")} style={{ padding: "5px 11px", borderRadius: 6, border: "none", background: tk.accent, cursor: "pointer", fontSize: 12, fontWeight: 600, color: tk.accentFg }}>Sign up</button>
+              {(isMobile || isTablet) && !user && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button className="nav-auth-btn" onClick={() => setAuthModal("login")} style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 500, color: tk.text2 }}>Log in</button>
+                  <button className="nav-auth-btn" onClick={() => setAuthModal("signup")} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: tk.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, color: tk.accentFg }}>Sign up</button>
                 </div>
               )}
-              {isMobile && user && (
+              {(isMobile || isTablet) && user && (
                 <div ref={userMenuRef} style={{ position: "relative" }}>
-                  <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 8px 3px 3px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
-                    {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
-                    <div style={{ width: 22, height: 22, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
+                  <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
+                    {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
+                    <div style={{ width: 26, height: 26, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
                     <svg width={9} height={9} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </button>
                   {userMenuOpen && (
@@ -5304,8 +5368,8 @@ export default function Page() {
                 </div>
               )}
               {user && profile && (
-                <button onClick={() => navigate("following")} style={{ position: "relative", width: 32, height: 32, borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: tk.text2 }}>
-                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
+                <button onClick={() => navigate("following")} style={{ position: "relative", width: isMobile || isTablet ? 40 : 36, height: isMobile || isTablet ? 40 : 36, borderRadius: 999, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: tk.text2 }}>
+                  <svg width={isMobile || isTablet ? 16 : 14} height={isMobile || isTablet ? 16 : 14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
                   {(profile.notifications?.filter(n => !n.read).length ?? 0) > 0 && (
                     <div style={{ position: "absolute", top: -4, right: -4, width: 16, height: 16, borderRadius: "50%", background: tk.rose, border: `2px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, color: "#fff" }}>
                       {profile.notifications!.filter(n => !n.read).length}
@@ -5313,37 +5377,139 @@ export default function Page() {
                   )}
                 </button>
               )}
-              <button onClick={toggleDark} style={{ width: 32, height: 32, borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", color: tk.text2 }}>{dark ? "○" : "●"}</button>
-              {isMobile && (
-                <button onClick={() => setMenuOpen(o => !o)} style={{ width: 44, height: 44, borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, padding: 0 }} aria-label="Menu">
-                  <span style={{ display: "block", width: 18, height: 2, borderRadius: 1, background: tk.text2, transition: "all 0.2s", transform: menuOpen ? "rotate(45deg) translate(0px, 4px)" : "none" }} />
-                  <span style={{ display: "block", width: 18, height: 2, borderRadius: 1, background: tk.text2, transition: "all 0.2s", opacity: menuOpen ? 0 : 1 }} />
-                  <span style={{ display: "block", width: 18, height: 2, borderRadius: 1, background: tk.text2, transition: "all 0.2s", transform: menuOpen ? "rotate(-45deg) translate(0px, -4px)" : "none" }} />
+              {(isMobile || isTablet) && (
+                <button onClick={toggleDark} aria-label="Toggle theme" style={{ position: "relative", width: 42, height: 24, borderRadius: 999, border: dark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.12)", background: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                  <span style={{ position: "absolute", top: "50%", left: dark ? 21 : 2, transform: "translateY(-50%)", width: 20, height: 20, borderRadius: "50%", background: dark ? "#FAFAFA" : "#1a1a1a", boxShadow: dark ? "0 1px 4px rgba(0,0,0,0.5)" : "0 1px 4px rgba(0,0,0,0.12)", transition: "left 0.25s cubic-bezier(0.32,0.72,0,1)" }} />
+                </button>
+              )}
+              {(isMobile || isTablet) && (
+                <button onClick={() => setMenuOpen(o => !o)} aria-label="Toggle menu" aria-expanded={menuOpen} style={{
+                  width: 40, height: 40, borderRadius: "50%", position: "relative",
+                  background: `linear-gradient(160deg, ${dark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.04)"}, ${dark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"})`,
+                  border: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"}`,
+                  cursor: "pointer", padding: 0, flexShrink: 0
+                }}>
+                  <span style={{ position: "absolute", left: 10, width: 20, height: 2, borderRadius: 2, background: tk.text, top: 13, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1), opacity 0.2s", transform: menuOpen ? "translateY(7px) rotate(45deg)" : "none" }} />
+                  <span style={{ position: "absolute", left: 10, width: 20, height: 2, borderRadius: 2, background: tk.text, top: 19, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1), opacity 0.2s", opacity: menuOpen ? 0 : 1 }} />
+                  <span style={{ position: "absolute", left: 10, width: 20, height: 2, borderRadius: 2, background: tk.text, top: 25, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1), opacity 0.2s", transform: menuOpen ? "translateY(-7px) rotate(-45deg)" : "none" }} />
                 </button>
               )}
             </div>
           </div>
+          </div>
+          {(!isMobile && !isTablet) && (
+          <div style={{ position: "fixed", right: 20, top: 39, transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: 8, zIndex: 201 }}>
+            <button onClick={toggleDark} aria-label="Toggle theme" style={{ position: "relative", width: 50, height: 28, borderRadius: 999, border: dark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.12)", background: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)", backdropFilter: "blur(20px) saturate(180%)", WebkitBackdropFilter: "blur(20px) saturate(180%)", boxShadow: dark ? "0 2px 8px rgba(0,0,0,0.3), inset 0 0.5px 0 rgba(255,255,255,0.06)" : "0 2px 8px rgba(0,0,0,0.03), inset 0 0.5px 0 rgba(0,0,0,0.08)", cursor: "pointer", padding: 0, transition: "background 0.25s ease, box-shadow 0.25s ease", flexShrink: 0 }}>
+              <span style={{ position: "absolute", top: "50%", left: dark ? 26 : 3, transform: "translateY(-50%)", width: 22, height: 22, borderRadius: "50%", background: dark ? "#FAFAFA" : "#1a1a1a", boxShadow: dark ? "0 1px 4px rgba(0,0,0,0.5)" : "0 1px 4px rgba(0,0,0,0.12)", transition: "left 0.25s cubic-bezier(0.32,0.72,0,1)" }} />
+            </button>
+          </div>
+          )}
         </nav>
 
-        {/* MOBILE MENU - OUTSIDE NAV FOR BETTER POSITIONING */}
-        {isMobile && menuOpen && (
-          <div className="slide-down" style={{ borderTop: `1px solid ${tk.border}`, background: dark ? "rgba(10,10,10,0.98)" : "rgba(245,245,245,0.98)", paddingBottom: 8, position: "fixed", top: 58, left: 0, right: 0, zIndex: 300, maxHeight: "calc(100vh - 58px)", overflowY: "auto" as const }} onClick={e => e.stopPropagation()}>
-              {user && (<div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>{user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}<div style={{ width: 32, height: 32, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div><div><div style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>{user.name}</div><div style={{ fontSize: 11, color: tk.text3 }}>{user.email}</div></div></div>)}
+        {/* SCRIM */}
+        {(isMobile || isTablet) && (
+          <div onClick={() => setMenuOpen(false)} style={{
+            position: "fixed", inset: 0, zIndex: 250,
+            background: "rgba(0,0,0,0.35)",
+            opacity: menuOpen ? 1 : 0,
+            pointerEvents: menuOpen ? "auto" as const : "none" as const,
+            transition: "opacity 0.35s cubic-bezier(0.22,1,0.36,1)"
+          }} />
+        )}
+        {/* GLASS DRAWER */}
+        {(isMobile || isTablet) && (
+          <nav onClick={e => e.stopPropagation()} style={{
+            position: "fixed", zIndex: 260,
+            top: 76, right: 16,
+            width: "74%", maxWidth: 290,
+            maxHeight: "calc(100vh - 96px)",
+            borderRadius: 28, overflow: "hidden",
+            background: `linear-gradient(165deg, ${dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)"}, ${dark ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.015)"})`,
+            backdropFilter: "blur(28px) saturate(170%)",
+            WebkitBackdropFilter: "blur(28px) saturate(170%)",
+            border: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)"}`,
+            boxShadow: dark ? "0 24px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.20)" : "0 24px 60px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.72)",
+            display: "flex", flexDirection: "column",
+            transform: menuOpen ? "translateX(0)" : "translateX(calc(100% + 28px))",
+            opacity: menuOpen ? 1 : 0,
+            transition: "transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.3s cubic-bezier(0.22,1,0.36,1)"
+          }}>
+            <div style={{ overflowY: "auto", padding: "18px 16px 24px", flex: 1, minHeight: 0 }}>
+              {user && (
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 6px 18px", borderBottom: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)"}`, marginBottom: 8 }}>
+                  {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 42, height: 42, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
+                  <div style={{ width: 42, height: 42, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, color: "#fff", flexShrink: 0, border: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)"}` }}>{initial(user.name)}</div>
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: tk.text }}>{user.name}</div>
+                    <div style={{ fontSize: 12.5, color: tk.text3, marginTop: 1 }}>{user.email}</div>
+                  </div>
+                </div>
+              )}
               {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }] as { id: Page; label: string }[]).map(item => (
-                <button key={item.id} onClick={() => navigate(item.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", textAlign: "left", padding: "16px 20px", border: "none", borderBottom: `1px solid ${tk.border}`, background: page === item.id ? tk.bgAlt : "transparent", cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 400, color: page === item.id ? tk.text : tk.text2, fontFamily: "inherit" }}>
-                  {item.label}{page === item.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: tk.blue, flexShrink: 0 }} />}
+                <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  width: "100%", textAlign: "left", padding: "13px 12px", margin: "2px 0",
+                  borderRadius: 14, border: "none", cursor: "pointer",
+                  fontSize: 14, fontWeight: 600, letterSpacing: "0.01em",
+                  color: page === item.id ? tk.text : tk.text2,
+                  background: page === item.id ? (dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)") : "transparent",
+                  fontFamily: "inherit", transition: "background 0.2s, color 0.2s"
+                }}
+                  onMouseEnter={e => { if (page !== item.id) (e.currentTarget as HTMLElement).style.background = dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)"; }}
+                  onMouseLeave={e => { if (page !== item.id) (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
+                  {item.label}
+                  {page === item.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: tk.blue, boxShadow: `0 0 8px ${tk.blue}`, flexShrink: 0 }} />}
                 </button>
               ))}
-              {navLinks.length > 0 && (<>
-                <div style={{ padding: "8px 20px 4px" }}><span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: tk.text3 }}>Sections</span></div>
-                {navLinks.map(l => (<button key={l.id} onClick={() => scroll(l.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "14px 20px 14px 28px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 400, color: tk.text2, fontFamily: "inherit" }}>{l.label}</button>))}
-              </>)}
-              {user && (<div style={{ padding: "10px 16px 6px" }}><button onClick={handleLogout} style={{ width: "100%", padding: "16px", borderRadius: 7, border: `1px solid ${tk.roseBorder}`, background: tk.roseLight, cursor: "pointer", fontSize: 14, fontWeight: 500, color: tk.rose, fontFamily: "inherit" }}>Sign out</button></div>)}
-          </div>
+              {navLinks.length > 0 && (
+                <div className="expand-down" key={navLinks.length}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: tk.text3, margin: "18px 12px 6px" }}>Sections</div>
+                  {navLinks.map(l => (
+                    <button key={l.id} onClick={() => { scroll(l.id); setMenuOpen(false); }} style={{
+                      display: "block", width: "100%", textAlign: "left",
+                      padding: "11px 12px", margin: "2px 0", borderRadius: 14,
+                      border: "none", background: "transparent", cursor: "pointer",
+                      fontSize: 13.5, fontWeight: 500, color: tk.text2,
+                      fontFamily: "inherit", transition: "background 0.2s, color 0.2s"
+                    }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)"; (e.currentTarget as HTMLElement).style.color = tk.text; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = tk.text2; }}>
+                      {l.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button onClick={() => { navigate("analyze"); setMenuOpen(false); }} style={{
+                width: "100%", padding: "13px", textAlign: "center",
+                borderRadius: 16, border: "none", cursor: "pointer",
+                fontSize: 14, fontWeight: 700,
+                color: dark ? "#0a0a0f" : tk.accentFg,
+                background: dark ? "linear-gradient(150deg, #FFFFFF, #D6D6D6)" : tk.accent,
+                boxShadow: dark ? "0 8px 20px rgba(255,255,255,0.18)" : "0 4px 12px rgba(0,0,0,0.10)",
+                fontFamily: "inherit", marginTop: 14
+              }}>
+                Run Analysis
+              </button>
+              {user && (
+                <button onClick={() => { handleLogout(); setMenuOpen(false); }} style={{
+                  display: "block", width: "100%", textAlign: "center",
+                  padding: "12px", marginTop: 8, borderRadius: 14,
+                  border: `1px solid ${dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"}`,
+                  background: "transparent", cursor: "pointer",
+                  fontSize: 13, fontWeight: 500, color: tk.text3,
+                  fontFamily: "inherit", transition: "all 0.15s"
+                }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = tk.roseLight; (e.currentTarget as HTMLElement).style.color = tk.rose; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = tk.text3; }}>
+                  Sign out
+                </button>
+              )}
+            </div>
+          </nav>
         )}
 
         {/* PAGES */}
-        <main role="main" style={{ maxWidth: 1100, margin: "0 auto", padding: `0 ${px} 80px` }}>
+        <main role="main" style={{ maxWidth: 1100, margin: "0 auto", padding: `${isMobile ? "72px" : "80px"} ${px} 80px` }}>
           <noscript><div style={{padding:40,textAlign:"center",maxWidth:700,margin:"0 auto"}}><h1>DevIQ - Developer Analytics Platform</h1><p>DevIQ analyzes your GitHub, LeetCode, and Codeforces profiles to generate a unified developer score. Enable JavaScript to use the interactive analytics dashboard.</p><p>Features: GitHub repo analytics, LeetCode stats, Codeforces ratings, AI insights, developer role-fit analysis, head-to-head comparison, contribution heatmaps, and practice recommendations.</p></div></noscript>
 
           {/* HOME */}
@@ -5510,6 +5676,27 @@ export default function Page() {
                     {data.codeforces?.rating !== undefined && (<>{[{ label: "Current Rating", v: data.codeforces.rating, a: tk.purple }, { label: "Peak Rating", v: data.codeforces.max_rating, a: tk.blue }, { label: "Rank", v: data.codeforces.rank || "unrated", a: cfColor(data.codeforces.rank, tk) }, { label: "Peak Rank", v: data.codeforces.max_rank || "unrated", a: cfColor(data.codeforces.max_rank, tk) }, { label: "Problems Solved", v: data.codeforces.problems_solved, a: tk.green }, { label: "Contests", v: data.codeforces.contests_participated, a: null }, { label: "Contribution", v: data.codeforces.contribution, a: (data.codeforces.contribution ?? 0) >= 0 ? tk.green : tk.rose }].map((s, i) => <StatRow key={s.label} label={s.label} value={s.v} accent={s.a} tk={tk} stripe={i % 2 === 0} />)}</>)}
                   </PlatformCard>
                 </div>
+                {((data.leetcode?.recent_solved?.length ?? 0) > 0 || (data.codeforces?.recent_solved?.length ?? 0) > 0) && (
+                  <div id="sec-solved" style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.06em", margin: "4px 0 10px" }}>Recently Solved Problems</div>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, alignItems: "start" }}>
+                      {(data.leetcode?.recent_solved?.length ?? 0) > 0 && (
+                        <RecentSolvedList
+                          title="LeetCode" handle={lc} platform="leetcode"
+                          tk={tk} accent={tk.amber} accentLight={tk.amberLight} accentBorder={tk.amberBorder}
+                          items={(data.leetcode!.recent_solved || []).map(p => ({ title: p.title, url: p.url, date: p.timestamp ? new Date(p.timestamp * 1000).toLocaleDateString() : undefined }))}
+                        />
+                      )}
+                      {(data.codeforces?.recent_solved?.length ?? 0) > 0 && (
+                        <RecentSolvedList
+                          title="Codeforces" handle={cf} platform="codeforces"
+                          tk={tk} accent={tk.purple} accentLight={tk.purpleLight} accentBorder={tk.purpleBorder}
+                          items={(data.codeforces!.recent_solved || []).map(p => ({ title: p.name, url: p.url, meta: p.rating ? `${p.rating}` : undefined, date: p.timestamp ? new Date(p.timestamp * 1000).toLocaleDateString() : undefined }))}
+                        />
+                      )}
+                    </div>
+                  </div>
+                )}
                 <DeveloperCard data={data} gh={gh} lc={lc} cf={cf} tk={tk} dark={dark} />
                 <AIPanel data={data} gh={gh} lc={lc} cf={cf} tk={tk} dark={dark} onAiInsight={() => { if (user) { const p = loadProfile(user.email); p.aiInsightsRun = (p.aiInsightsRun || 0) + 1; saveProfile(user.email, p); setProfile({ ...p }); } }} />
                 {gh && data.github && <ContributionHeatmap username={gh.trim()} tk={tk} dark={dark} />}
@@ -5590,6 +5777,7 @@ export default function Page() {
             profile={profile} 
             tk={tk} 
             isMobile={isMobile} 
+            dark={dark}
             onNavigate={(p) => navigate(p)}
             connectedAccounts={connectedAccounts}
             connectingPlatform={connectingPlatform}
