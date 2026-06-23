@@ -5097,23 +5097,31 @@ export default function Page() {
     }
   };
 
-  async function fetchApi(path: string, retries = 3): Promise<any> {
+  const API_BACKEND = "https://developer-portfolio-backend-bu76.onrender.com";
+  const WARMED = useRef(false);
+
+  async function fetchApi(path: string, retries = 6): Promise<any> {
     for (let i = 0; i < retries; i++) {
-      const r = await fetch(`/api/proxy${path}?v=${Date.now()}`);
-      const t = await r.text();
-      if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) {
-        const j = JSON.parse(t);
-        if (j.error) throw new Error(j.error);
-        return j;
-      }
-      if (i < retries - 1) await new Promise(r => setTimeout(r, 2000));
+      try {
+        const r = await fetch(`${API_BACKEND}${path}`, { mode: "cors" });
+        const t = await r.text();
+        if (r.headers.get("content-type")?.includes("json") && t.startsWith("{")) {
+          const j = JSON.parse(t);
+          if (j.error) throw new Error(j.error);
+          return j;
+        }
+      } catch {}
+      if (i < retries - 1) await new Promise(r => setTimeout(r, i === 0 ? 5000 : 3000));
     }
     throw new Error("backend unavailable");
   }
 
-  // Warm up the backend on mount so it's ready when the user submits
+  // Warm up the backend on mount
   useEffect(() => {
-    fetch(`/api/proxy/analyze/ping?warm=${Date.now()}`).catch(() => {});
+    if (!WARMED.current) {
+      WARMED.current = true;
+      fetch(`${API_BACKEND}/analyze/ping`, { mode: "cors" }).catch(() => {});
+    }
   }, []);
 
   const analyze = useCallback(async () => {
