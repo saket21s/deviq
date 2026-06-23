@@ -5448,7 +5448,7 @@ export default function Page() {
           <nav onClick={e => e.stopPropagation()} style={{
             position: "fixed", zIndex: 260,
             top: 76, right: 16,
-            width: "74%", maxWidth: 290,
+            width: "64%", maxWidth: 250,
             maxHeight: "calc(100vh - 96px)",
             borderRadius: 28, overflow: "hidden",
             background: dark 
@@ -5525,11 +5525,11 @@ export default function Page() {
                   padding: "12px", marginTop: 8, borderRadius: 14,
                   border: `1px solid ${dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"}`,
                   background: "transparent", cursor: "pointer",
-                  fontSize: 13, fontWeight: 500, color: tk.text3,
+                  fontSize: 13, fontWeight: 500, color: tk.rose,
                   fontFamily: "inherit", transition: "all 0.15s"
                 }}
                   onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = tk.roseLight; (e.currentTarget as HTMLElement).style.color = tk.rose; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = tk.text3; }}>
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = tk.rose; }}>
                   Sign out
                 </button>
               )}
