@@ -99,6 +99,8 @@ const jsonLd = {
     "LeetCode problem solving statistics",
     "Codeforces competitive programming rating tracker",
     "Unified developer score across platforms",
+    "Interactive code playground with multi-language execution",
+    "AI code review with bug, complexity and security analysis",
     "AI-powered developer insights and improvement plans",
     "Developer role-fit analysis",
     "Head-to-head developer comparison",

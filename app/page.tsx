@@ -12,8 +12,8 @@ import {
   Legend,
   Filler,
 } from "chart.js";
-import { 
-  initiateGoogleLogin, 
+import {
+  initiateGoogleLogin,
   initiateGithubLogin,
   exchangeCodeForToken,
   verifyStateForProvider,
@@ -24,6 +24,8 @@ import {
   AUTH_TOKEN_KEY,
   USER_KEY
 } from "@/lib/oauth";
+import PlaygroundPage from "@/components/PlaygroundPage";
+import CodeReviewPage from "@/components/CodeReviewPage";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -38,7 +40,7 @@ const LINKEDIN_CLIENT_ID = process.env.NEXT_PUBLIC_LINKEDIN_CLIENT_ID ?? "";
    TYPES
 ───────────────────────────────────────────────── */
 type Theme = typeof THEMES.light;
-type Page = "home" | "analyze" | "compare" | "profile" | "settings" | "history" | "following" | "chat" | "practice";
+type Page = "home" | "analyze" | "compare" | "playground" | "review" | "profile" | "settings" | "history" | "following" | "chat" | "practice";
 interface AuthUser { name: string; email: string; avatar?: string; provider?: "google" | "github" | "email"; }
 interface ConnectedAccount {
   platform: string;
@@ -4411,7 +4413,7 @@ export default function Page() {
       // Detect page from URL pathname, preserving query params
       const pathname = window.location.pathname.replace(/^\/|\/$|\/index\.html$/g, "").split('?')[0];
       const pathPage = pathname as Page;
-      const validPages: Page[] = ["home", "analyze", "compare", "profile", "settings", "history", "following", "chat", "practice"];
+      const validPages: Page[] = ["home", "analyze", "compare", "playground", "review", "profile", "settings", "history", "following", "chat", "practice"];
       const initialPage = (pathname && validPages.includes(pathPage)) ? pathPage : "home";
       console.log("[DevIQ] Detected page from URL:", { pathname, pathPage, initialPage, url: window.location.href });
       setPage(initialPage);
@@ -5291,7 +5293,7 @@ export default function Page() {
             <button onClick={() => navigate("home")} style={{ fontSize: isMobile ? 17 : isTablet ? 19 : 17, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0, display: "flex", alignItems: "center" }}>DevIQ</button>
             {!isMobile && !isTablet && (
               <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }] as { id: Page; label: string }[]).map(item => (
+                {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "review" as const, label: "Review" }] as { id: Page; label: string }[]).map(item => (
                   <button key={item.id} onClick={() => navigate(item.id)} style={{ padding: "7px 16px", borderRadius: 999, cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 500, color: page === item.id ? "#fff" : tk.text2, background: page === item.id ? (dark ? "rgba(255,255,255,0.16)" : "rgba(10,10,10,0.78)") : "transparent", backdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", WebkitBackdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", border: page === item.id ? `1px solid ${dark ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.22)"}` : "1px solid transparent", boxShadow: page === item.id ? "inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 14px rgba(0,0,0,0.28)" : "none", transition: "all 0.15s" }}
                     onMouseEnter={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.bgAlt; } }}
                     onMouseLeave={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text2; (e.currentTarget as HTMLElement).style.background = "transparent"; } }}>
@@ -5338,7 +5340,7 @@ export default function Page() {
                         </div>
                         <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
                       </div>
-                      {[{ label: "Profile", action: () => navigate("profile") }, { label: "Following", action: () => navigate("following") }, { label: "History", action: () => navigate("history") }, { label: "Practice", action: () => navigate("practice") }, { label: "Chat", action: () => navigate("chat") }, { label: "Settings", action: () => navigate("settings") }].map(item => (
+                      {[{ label: "Profile", action: () => navigate("profile") }, { label: "Playground", action: () => navigate("playground") }, { label: "Code Review", action: () => navigate("review") }, { label: "Following", action: () => navigate("following") }, { label: "History", action: () => navigate("history") }, { label: "Practice", action: () => navigate("practice") }, { label: "Chat", action: () => navigate("chat") }, { label: "Settings", action: () => navigate("settings") }].map(item => (
                         <button key={item.label} onClick={item.action} style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 12, color: tk.text2, fontFamily: "inherit", transition: "background 0.12s" }}
                           onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.bgAlt}
                           onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>{item.label}</button>
@@ -5374,7 +5376,7 @@ export default function Page() {
                         </div>
                         <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
                       </div>
-                      {[{ label: "Profile", action: () => { navigate("profile"); setUserMenuOpen(false); } }, { label: "Following", action: () => { navigate("following"); setUserMenuOpen(false); } }, { label: "History", action: () => { navigate("history"); setUserMenuOpen(false); } }, { label: "Practice", action: () => { navigate("practice"); setUserMenuOpen(false); } }, { label: "Chat", action: () => { navigate("chat"); setUserMenuOpen(false); } }, { label: "Settings", action: () => { navigate("settings"); setUserMenuOpen(false); } }].map(item => (
+                      {[{ label: "Profile", action: () => { navigate("profile"); setUserMenuOpen(false); } }, { label: "Playground", action: () => { navigate("playground"); setUserMenuOpen(false); } }, { label: "Code Review", action: () => { navigate("review"); setUserMenuOpen(false); } }, { label: "Following", action: () => { navigate("following"); setUserMenuOpen(false); } }, { label: "History", action: () => { navigate("history"); setUserMenuOpen(false); } }, { label: "Practice", action: () => { navigate("practice"); setUserMenuOpen(false); } }, { label: "Chat", action: () => { navigate("chat"); setUserMenuOpen(false); } }, { label: "Settings", action: () => { navigate("settings"); setUserMenuOpen(false); } }].map(item => (
                         <button key={item.label} onClick={item.action} style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: tk.text2, fontFamily: "inherit", transition: "background 0.12s" }}
                           onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.bgAlt}
                           onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>{item.label}</button>
@@ -5467,7 +5469,7 @@ export default function Page() {
                   </div>
                 </div>
               )}
-              {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }] as { id: Page; label: string }[]).map(item => (
+              {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "review" as const, label: "Review" }] as { id: Page; label: string }[]).map(item => (
                 <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   width: "100%", textAlign: "left", padding: "13px 12px", margin: "2px 0",
@@ -5548,6 +5550,7 @@ export default function Page() {
                     <p itemProp="description" style={{ fontSize: 16, color: tk.text2, lineHeight: 1.7, maxWidth: 500, fontWeight: 400, marginBottom: 36 }}>DevIQ unifies your GitHub, LeetCode, and Codeforces stats into a single score — with AI insights, contribution tracking, and head-to-head comparisons.</p>
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                       <button onClick={() => navigate("analyze")} style={{ padding: "11px 24px", borderRadius: 8, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, background: tk.accent, color: tk.accentFg, letterSpacing: "-0.01em" }}>Analyze Profile</button>
+                      <button onClick={() => navigate("playground")} style={{ padding: "11px 24px", borderRadius: 8, border: `1px solid ${tk.border}`, cursor: "pointer", fontSize: 13, fontWeight: 600, background: tk.surface, color: tk.text, letterSpacing: "-0.01em" }}>Try Playground</button>
                       <button onClick={() => navigate("compare")} style={{ padding: "11px 24px", borderRadius: 8, border: `1px solid ${tk.border}`, cursor: "pointer", fontSize: 13, fontWeight: 500, background: tk.surface, color: tk.text2, letterSpacing: "-0.01em" }}>Compare Developers</button>
                     </div>
                   </div>
@@ -5600,6 +5603,8 @@ export default function Page() {
                     { icon: <span style={{ fontSize: 18 }}>◎</span>, title: "Unified Score", desc: "A single weighted developer score combining activity, problem solving, and CP.", color: tk.green, bg: tk.greenLight, border: tk.greenBorder },
                     { icon: <span style={{ fontSize: 18 }}>⊞</span>, title: "AI Insights", desc: "Get a sharp AI-generated roast or a personalized 7-day improvement plan.", color: tk.rose, bg: tk.roseLight, border: tk.roseBorder },
                     { icon: <span style={{ fontSize: 18 }}>⇄</span>, title: "Compare Mode", desc: "Head-to-head comparison between two developers across every metric.", color: tk.teal, bg: tk.greenLight, border: tk.greenBorder },
+                    { icon: <span style={{ fontSize: 18 }}>▸</span>, title: "Code Playground", desc: "Write and run JavaScript, Python, Java, Go, Rust and more — with live output.", color: tk.blue, bg: tk.blueLight, border: tk.blueBorder },
+                    { icon: <span style={{ fontSize: 18 }}>✓</span>, title: "AI Code Review", desc: "Paste code for bugs, time & space complexity, security issues, and fixes.", color: tk.purple, bg: tk.purpleLight, border: tk.purpleBorder },
                   ].map((f, i) => (
                     <div key={i} style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, padding: "20px 22px", boxShadow: tk.shadow }}>
                       <div style={{ width: 36, height: 36, borderRadius: 8, background: f.bg, border: `1px solid ${f.border}`, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 14, color: f.color }}>{f.icon}</div>
@@ -5789,6 +5794,26 @@ export default function Page() {
           {page === "practice" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to get personalized practice recommendations.</div>
+              <button onClick={() => setAuthModal("login")} style={{ padding: "9px 20px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Sign In</button>
+            </div>
+          )}
+
+          {/* PLAYGROUND — login required, like chat/practice/review */}
+          {page === "playground" && user && (
+            <PlaygroundPage tk={tk} isMobile={isMobile} />
+          )}
+          {page === "playground" && !user && (
+            <div style={{ padding: "80px 0", textAlign: "center" }}>
+              <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to use the interactive playground.</div>
+              <button onClick={() => setAuthModal("login")} style={{ padding: "9px 20px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Sign In</button>
+            </div>
+          )}
+
+          {/* REVIEW — AI code review (login required, like chat/practice) */}
+          {page === "review" && user && <CodeReviewPage tk={tk} isMobile={isMobile} />}
+          {page === "review" && !user && (
+            <div style={{ padding: "80px 0", textAlign: "center" }}>
+              <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to get AI code reviews.</div>
               <button onClick={() => setAuthModal("login")} style={{ padding: "9px 20px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Sign In</button>
             </div>
           )}
