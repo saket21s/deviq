@@ -1294,7 +1294,7 @@ function RepoTreeBody({ data, tk }: { data: RepoTreeData; tk: Theme }) {
   const shown = roots.slice(0, TREE_TOP);
   const hiddenRoots = roots.length - shown.length;
   return (
-    <div style={{ padding: "8px 10px 10px", overflowY: "auto" as const }}>
+    <div style={{ padding: "8px 10px 10px" }}>
       {shown.map(n => (
         <div key={n.name}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "3.5px 6px", borderRadius: 6, fontSize: 12, color: n.isDir ? tk.text : tk.text2, fontWeight: n.isDir ? 600 : 400 }}>
@@ -1324,10 +1324,9 @@ function RepoTreeBody({ data, tk }: { data: RepoTreeData; tk: Theme }) {
   );
 }
 
-function RepoTreePopup({ owner, repoName, repoUrl, tk, pos, sheet, attempt, onRetry, onClose }: {
+function RepoTreePopup({ owner, repoName, repoUrl, tk, openUp, maxH, attempt, onRetry, onClose }: {
   owner: string; repoName: string; repoUrl: string; tk: Theme;
-  pos: { left: number; top: number; width: number } | null;
-  sheet: boolean; attempt: number;
+  openUp: boolean; maxH: number; attempt: number;
   onRetry: () => void; onClose: () => void;
 }) {
   const tree = useRepoTree(owner, repoName, true, attempt);
@@ -1337,12 +1336,15 @@ function RepoTreePopup({ owner, repoName, repoUrl, tk, pos, sheet, attempt, onRe
     const t = window.setTimeout(() => setSlow(true), 4000);
     return () => clearTimeout(t);
   }, [tree.loading]);
-  const style: CSSProperties = sheet
-    ? { position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 90, maxHeight: "62vh" }
-    : { position: "fixed", left: pos?.left ?? -9999, top: pos?.top ?? 0, width: pos?.width ?? 300, zIndex: 90, maxHeight: 350 };
   return (
-    <div className="fu" role="dialog" aria-label={`File structure of ${repoName}`}
-      style={{ ...style, display: "flex", flexDirection: "column", overflow: "hidden", background: tk.surface, border: `1px solid ${tk.borderStrong}`, borderRadius: 12, boxShadow: tk.shadowLg }}>
+    <div role="dialog" aria-label={`File structure of ${repoName}`}
+      style={{
+        position: "absolute", top: openUp ? "auto" : -6, bottom: openUp ? -6 : "auto",
+        left: -6, right: -6, minHeight: "calc(100% + 12px)", maxHeight: maxH, zIndex: 30,
+        display: "flex", flexDirection: "column", overflow: "hidden", cursor: "default",
+        background: tk.surface, border: `1px solid ${tk.borderStrong}`, borderRadius: 12,
+        boxShadow: tk.shadowLg, animation: "popIn 0.18s cubic-bezier(0.16,1,0.3,1) both",
+      }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: `1px solid ${tk.border}`, flexShrink: 0 }}>
         <TreeFolderIcon tk={tk} />
         <span style={{ fontSize: 12.5, fontWeight: 600, color: tk.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{repoName}</span>
@@ -1368,28 +1370,32 @@ function RepoTreePopup({ owner, repoName, repoUrl, tk, pos, sheet, attempt, onRe
           <button onClick={onRetry} style={{ fontSize: 12, fontWeight: 600, color: tk.blue, background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, borderRadius: 7, padding: "6px 16px", cursor: "pointer" }}>Retry</button>
         </div>
       ) : tree.data ? (
-        <RepoTreeBody data={tree.data} tk={tk} />
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" as const }}>
+          <RepoTreeBody data={tree.data} tk={tk} />
+        </div>
       ) : null}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderTop: `1px solid ${tk.border}`, flexShrink: 0 }}>
-        {tree.data && !tree.loading && !tree.error && (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderTop: `1px solid ${tk.border}`, flexShrink: 0 }}>
+        {tree.data && !tree.loading && !tree.error ? (
           <span style={{ fontSize: 11, color: tk.text3, fontVariantNumeric: "tabular-nums" as const }}>{tree.data.total_files} files · {tree.data.total_dirs} folders</span>
+        ) : (
+          <span style={{ fontSize: 11, color: tk.text3 }}>File structure</span>
         )}
         <span style={{ flex: 1 }} />
-        <a href={`${repoUrl}/tree/${tree.data?.branch ?? "HEAD"}`} target="_blank" rel="noopener noreferrer"
-          style={{ fontSize: 11.5, fontWeight: 600, color: tk.blue, textDecoration: "none" }}>
-          View on GitHub →
+        <a href={repoUrl} target="_blank" rel="noopener noreferrer"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: tk.accentFg, background: tk.accent, borderRadius: 8, padding: "7px 14px", textDecoration: "none", whiteSpace: "nowrap" as const }}>
+          Open on GitHub
+          <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
         </a>
       </div>
     </div>
   );
 }
 
-function RepoCard({ repo, owner, tk, delay = 0, isMobile }: { repo: NormalizedRepo; owner: string; tk: Theme; delay?: number; isMobile: boolean }) {
+function RepoCard({ repo, owner, tk, delay = 0 }: { repo: NormalizedRepo; owner: string; tk: Theme; delay?: number }) {
   const [hov, setHov] = useState(false);
   const [hoverPreview, setHoverPreview] = useState(false);
   const [pinned, setPinned] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
-  const [sheet, setSheet] = useState(false);
+  const [anchor, setAnchor] = useState<{ openUp: boolean; maxH: number }>({ openUp: false, maxH: 340 });
   const [attempt, setAttempt] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
   const enterTimer = useRef<number | null>(null);
@@ -1405,39 +1411,16 @@ function RepoCard({ repo, owner, tk, delay = 0, isMobile }: { repo: NormalizedRe
 
   useEffect(() => clearTimers, []);
 
-  const computePos = useCallback(() => {
+  // Decide whether the overlay should expand downward or upward, and how tall
+  // it may grow. It is anchored to the card itself, so it always appears on
+  // the hovered repository — no scroll/resize bookkeeping needed.
+  const placePreview = () => {
     const el = wrapRef.current;
-    if (!el || typeof window === "undefined") return;
-    if (isMobile || window.innerWidth < 720) { setSheet(true); setPos(null); return; }
-    setSheet(false);
+    if (!el || typeof window === "undefined") { setAnchor({ openUp: false, maxH: 340 }); return; }
     const r = el.getBoundingClientRect();
-    const W = Math.min(300, window.innerWidth - 24), GAP = 12;
-    const rightFits = r.right + GAP + W <= window.innerWidth;
-    let left = rightFits ? r.right + GAP : r.left - GAP - W;
-    // Clamp into the viewport so the panel is never stranded off-screen
-    // (it may overlap the card in tight layouts, but stays visible).
-    left = Math.max(12, Math.min(left, window.innerWidth - W - 12));
-    setPos({
-      left,
-      top: Math.max(12, Math.min(r.top, window.innerHeight - 370)),
-      width: W,
-    });
-  }, [isMobile]);
-
-  // Keep hover previews from going stale on scroll/resize; pinned ones follow the card.
-  useEffect(() => {
-    if (!showPreview || typeof window === "undefined") return;
-    const onScroll = () => {
-      if (pinned) computePos();
-      else setHoverPreview(false);
-    };
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onScroll);
-    return () => {
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onScroll);
-    };
-  }, [showPreview, pinned, computePos]);
+    const openUp = r.bottom > window.innerHeight - 200 && r.top > 280;
+    setAnchor({ openUp, maxH: openUp ? Math.max(220, Math.floor(r.top - 24)) : 340 });
+  };
 
   const handleEnter = () => {
     setHov(true);
@@ -1447,14 +1430,14 @@ function RepoCard({ repo, owner, tk, delay = 0, isMobile }: { repo: NormalizedRe
     // when sweeping across the grid. (No pointer gate: hover events only fire
     // on hover-capable pointers; touch users get the pin button instead.)
     if (repoTreeCache.has(repoTreeKey(owner, repo.name))) {
-      computePos();
+      placePreview();
       setHoverPreview(true);
       return;
     }
     if (enterTimer.current === null) {
       enterTimer.current = window.setTimeout(() => {
         enterTimer.current = null;
-        computePos();
+        placePreview();
         setHoverPreview(true);
       }, 120);
     }
@@ -1486,7 +1469,7 @@ function RepoCard({ repo, owner, tk, delay = 0, isMobile }: { repo: NormalizedRe
       return;
     }
     clearTimers();
-    computePos();
+    placePreview();
     setPinned(true);
   };
 
@@ -1499,7 +1482,7 @@ function RepoCard({ repo, owner, tk, delay = 0, isMobile }: { repo: NormalizedRe
       ref={wrapRef}
       onMouseEnter={handleEnter} onMouseLeave={handleLeave}
       className="fu"
-      style={{ animationDelay: `${Math.min(delay, 8) * 40}ms`, position: "relative", minWidth: 0 }}
+      style={{ animationDelay: `${Math.min(delay, 8) * 40}ms`, position: "relative", minWidth: 0, zIndex: showPreview ? 40 : undefined }}
     >
     <a
       href={repo.url} target="_blank" rel="noopener noreferrer"
@@ -1609,7 +1592,7 @@ function RepoCard({ repo, owner, tk, delay = 0, isMobile }: { repo: NormalizedRe
     {showPreview && (
       <RepoTreePopup
         owner={owner} repoName={repo.name} repoUrl={repo.url} tk={tk}
-        pos={pos} sheet={sheet} attempt={attempt}
+        openUp={anchor.openUp} maxH={anchor.maxH} attempt={attempt}
         onRetry={retry} onClose={closePreview}
       />
     )}
@@ -1673,7 +1656,7 @@ function RepositoriesSection({ repos, gh, tk, isMobile }: { repos: RepoItem[]; g
   };
 
   return (
-    <div id="sec-repos" style={{ background: tk.surface, borderRadius: 12, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow, marginBottom: 8 }}>
+    <div id="sec-repos" style={{ background: tk.surface, borderRadius: 12, border: `1px solid ${tk.border}`, overflow: "visible", boxShadow: tk.shadow, marginBottom: 8 }}>
       {/* header */}
       <div style={{ padding: isMobile ? "14px 16px 12px" : "15px 20px 13px", borderBottom: `1px solid ${tk.border}` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
@@ -1726,7 +1709,7 @@ function RepositoriesSection({ repos, gh, tk, isMobile }: { repos: RepoItem[]; g
       {/* grid */}
       {visible.length > 0 ? (
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill,minmax(265px,1fr))", gap: 12, padding: isMobile ? 14 : 18 }}>
-          {visible.map((r, i) => <RepoCard key={`${r.name}-${i}`} repo={r} owner={gh} tk={tk} delay={i % PAGE} isMobile={isMobile} />)}
+          {visible.map((r, i) => <RepoCard key={`${r.name}-${i}`} repo={r} owner={gh} tk={tk} delay={i % PAGE} />)}
         </div>
       ) : (
         <div style={{ padding: "36px 20px", textAlign: "center" }}>
@@ -5938,6 +5921,7 @@ export default function Page() {
         @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
         @keyframes shimmer{0%,100%{opacity:1}50%{opacity:0.5}}
         @keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+        @keyframes popIn{from{opacity:0;transform:scale(.96) translateY(6px)}to{opacity:1;transform:none}}
         @keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
         @keyframes expandDown{from{opacity:0;transform:translateY(-12px) scaleY(0.92)}to{opacity:1;transform:none}}
         @keyframes overlayIn{from{opacity:0}to{opacity:1}}
