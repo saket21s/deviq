@@ -1,5 +1,26 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+
+// Monaco (the VS Code editor) is heavy, so it loads only on this page,
+// never in the main bundle.
+const CodeEditor = dynamic(() => import("./CodeEditor"), {
+  ssr: false,
+  loading: () => (
+    <div
+      style={{
+        height: 420,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 13,
+        color: "#888",
+      }}
+    >
+      Loading VS Code editor…
+    </div>
+  ),
+});
 
 // Minimal theme shape — compatible with DevIQ's Theme objects in app/page.tsx
 export interface PlaygroundTheme {
@@ -47,6 +68,29 @@ interface RunResult {
   local?: boolean;
 }
 
+/** One terminal transcript row. */
+type TLineKind = "cmd" | "out" | "err" | "warn" | "in" | "sys";
+interface TLine {
+  id: number;
+  kind: TLineKind;
+  text: string;
+}
+
+/** Displayed run command per language (cosmetic, like a real shell). */
+const RUN_CMD: Record<string, string> = {
+  javascript: "node",
+  typescript: "ts-node",
+  python: "python3",
+  java: "java",
+  c: "./a.out",
+  cpp: "./a.out",
+  go: "go run",
+  rust: "./main",
+  ruby: "ruby",
+  csharp: "dotnet run",
+  kotlin: "kotlin",
+};
+
 interface LanguageDef {
   id: string;
   label: string;
@@ -75,7 +119,7 @@ const LANGUAGES: LanguageDef[] = [
     label: "Python",
     extension: "py",
     piston: true,
-    defaultCode: `# Python runs instantly in your browser (Pyodide).\n# input() reads from the "stdin" box below.\nprint("Hello from DevIQ Playground!")\n\ndef fibonacci(n):\n    a, b = 0, 1\n    for _ in range(n):\n        print(a, end=" ")\n        a, b = b, a + b\n\nfibonacci(10)\nprint()`,
+    defaultCode: `# Python runs instantly in your browser (Pyodide).\n# input() reads from the terminal below.\nprint("Hello from DevIQ Playground!")\n\ndef fibonacci(n):\n    a, b = 0, 1\n    for _ in range(n):\n        print(a, end=" ")\n        a, b = b, a + b\n\nfibonacci(10)\nprint()`,
   },
   {
     id: "java",
@@ -135,12 +179,81 @@ const LANGUAGES: LanguageDef[] = [
   },
 ];
 
+/** Languages backed by the live interactive runner (mid-run prompts work).
+ *  JavaScript stays fully local; the rest fall back to batch when offline. */
+const LIVE_LANGS = ["javascript", "python", "typescript", "java", "c", "cpp", "go"];
+
+/** How each language reads a line from stdin (shown in the terminal hint). */
+const INPUT_HINT: Record<string, string> = {
+  javascript: "prompt()",
+  typescript: "prompt()",
+  python: "input()",
+  java: "new Scanner(System.in)",
+  c: "scanf()",
+  cpp: "std::cin",
+  go: "fmt.Scan()",
+  rust: "io::stdin().read_line()",
+  ruby: "gets",
+  csharp: "Console.ReadLine()",
+  kotlin: "readLine()",
+};
+
+/** Patterns showing the program reads from stdin. Used to hint inside the
+ *  terminal when nothing was typed yet so programs don't silently see EOF. */
+const READS_STDIN: Record<string, RegExp[]> = {
+  javascript: [/\bprompt\s*\(/],
+  typescript: [/\bprompt\s*\(/],
+  python: [/\binput\s*\(/, /\bsys\.stdin\b/],
+  java: [/new\s+Scanner\s*\(\s*System\.in/, /\bSystem\.in\b/],
+  c: [/\bscanf\s*\(/, /\bgetchar\s*\(/, /\bfgets\s*\(/],
+  cpp: [/std::cin\s*>>|cin\s*>>/, /getline\s*\(\s*(std::)?cin/, /\bscanf\s*\(/],
+  go: [/fmt\.Scan/, /bufio\.\w*Reader/, /\bos\.Stdin\b/],
+  rust: [/io::stdin/, /read_line\s*\(/],
+  ruby: [/(^|[^\w.])gets\b/, /\bSTDIN\b/],
+  csharp: [/Console\.ReadLine\s*\(/, /Console\.In\b/],
+  kotlin: [/\breadLine\s*\(\s*\)/, /readln\s*\(/],
+};
+
+export function readsStdin(code: string, language: string): boolean {
+  const rules = READS_STDIN[(language || "").toLowerCase()];
+  if (!rules) return false;
+  // Ignore matches inside comments (rough scan; detection only).
+  const stripped = code
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:"'\\])\/\/.*$/gm, "$1")
+    .replace(/^[ \t]*#[^\n]*/gm, "")
+    .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, '""');
+  return rules.some((re) => re.test(stripped));
+}
+
 function storageKey(lang: string) {
   return `deviq_playground_${lang}`;
 }
 
-/** Run JavaScript locally in the browser with console capture. */
-async function runJavaScriptLocally(code: string): Promise<RunResult> {
+function stdinKey(lang: string) {
+  return `deviq_stdin_${lang}`;
+}
+
+/** Run JavaScript locally in the browser with console capture.
+ *  `prompt(msg?)` is shimmed to read lines from the terminal, so every
+ *  language — including JS — can take input from the same place. */
+/** Live I/O bridge between a locally-run program and the terminal UI. */
+export interface LocalRunIO {
+  /** Synchronously consume one queued terminal line (null when empty). */
+  takeLine: () => string | null;
+  /** Wait for the next line submitted in the terminal (truly interactive). */
+  waitLine: () => Promise<string>;
+  /** Stream a line to the terminal transcript. */
+  print: (text: string) => void;
+  printErr: (text: string) => void;
+  /** True while suspended on waitLine (drives the waiting indicator). */
+  setWaiting: (w: boolean) => void;
+}
+
+/** Run JavaScript locally in the browser with console capture.
+ *  `prompt(msg?)` consumes queued terminal lines; `await input(msg?)`
+ *  genuinely waits for the user to type in the terminal mid-run. */
+export async function runJavaScriptLocally(code: string, io: LocalRunIO): Promise<RunResult> {
   const logs: string[] = [];
   const fmt = (args: unknown[]) =>
     args
@@ -153,33 +266,82 @@ async function runJavaScriptLocally(code: string): Promise<RunResult> {
         }
       })
       .join(" ");
+  const emit = (text: string) => {
+    logs.push(text);
+    io.print(text);
+  };
 
   const sandboxConsole = {
-    log: (...args: unknown[]) => void logs.push(fmt(args)),
-    info: (...args: unknown[]) => void logs.push(fmt(args)),
-    warn: (...args: unknown[]) => void logs.push(`⚠ ${fmt(args)}`),
-    error: (...args: unknown[]) => void logs.push(`✖ ${fmt(args)}`),
+    log: (...args: unknown[]) => void emit(fmt(args)),
+    info: (...args: unknown[]) => void emit(fmt(args)),
+    warn: (...args: unknown[]) => void emit(`⚠ ${fmt(args)}`),
+    error: (...args: unknown[]) => void emit(`✖ ${fmt(args)}`),
     table: (data: unknown) => {
       try {
-        logs.push(JSON.stringify(data, null, 2) ?? String(data));
+        emit(JSON.stringify(data, null, 2) ?? String(data));
       } catch {
-        logs.push(String(data));
+        emit(String(data));
       }
     },
     clear: () => void logs.length,
   };
 
+  const sandboxPrompt = (msg?: unknown): string => {
+    if (msg !== undefined) emit(String(msg));
+    return io.takeLine() ?? "";
+  };
   const t0 = performance.now();
+  let waiting = false;
+  const setWaitingBoth = (w: boolean) => {
+    waiting = w;
+    io.setWaiting(w);
+  };
+  // input() suspends until the user submits a line in the terminal.
+  const sandboxInputTracked = async (msg?: unknown): Promise<string> => {
+    if (msg !== undefined) emit(String(msg));
+    setWaitingBoth(true);
+    try {
+      return await io.waitLine();
+    } finally {
+      setWaitingBoth(false);
+    }
+  };
   try {
     // Wrap in async function so top-level await works.
     const fn = new Function(
       "console",
+      "prompt",
+      "input",
       `"use strict";\nreturn (async () => {\n${code}\n})();`
     );
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Timed out after 5s (infinite loop?)")), 5000)
-    );
-    await Promise.race([fn(sandboxConsole), timeout]);
+    // Wait-aware timeout: plain code gets 5s; a program suspended on
+    // input() may wait up to 120s for the user.
+    const BASE_MS = 5000;
+    const MAX_MS = 120000;
+    await new Promise<void>((resolve, reject) => {
+      const t = setInterval(() => {
+        const elapsed = Date.now() - t0;
+        if (!waiting && elapsed > BASE_MS) {
+          clearInterval(t);
+          reject(new Error("Timed out after 5s (infinite loop?)"));
+        } else if (waiting && elapsed > MAX_MS) {
+          clearInterval(t);
+          reject(new Error("Timed out waiting for input (120s)."));
+        }
+      }, 250);
+      Promise.resolve()
+        .then(() => fn(sandboxConsole, sandboxPrompt, sandboxInputTracked))
+        .then(
+          () => {
+            clearInterval(t);
+            resolve();
+          },
+          (e) => {
+            clearInterval(t);
+            reject(e);
+          }
+        );
+    });
     return {
       stdout: logs.join("\n"),
       stderr: "",
@@ -255,23 +417,38 @@ function loadPyodideOnce(onStatus: (msg: string) => void): Promise<PyodideApi> {
 
 async function runPythonLocally(
   code: string,
-  stdin: string,
+  io: Pick<LocalRunIO, "takeLine" | "print" | "printErr">,
   onStatus: (msg: string) => void
 ): Promise<RunResult> {
   const t0 = performance.now();
   const py = await loadPyodideOnce(onStatus);
   const out: string[] = [];
   const err: string[] = [];
-  py.setStdout({ batched: (s) => void out.push(s) });
-  py.setStderr({ batched: (s) => void err.push(s) });
-  // Feed stdin char-by-char so input() works line by line.
-  const chars = stdin.length > 0 ? `${stdin}\n`.split("") : [];
-  let ci = 0;
+  py.setStdout({
+    batched: (s) => {
+      out.push(s);
+      io.print(s);
+    },
+  });
+  py.setStderr({
+    batched: (s) => {
+      err.push(s);
+      io.printErr(s);
+    },
+  });
+  // input() consumes queued terminal lines one per call. Pyodide cannot
+  // suspend for mid-run typing, so lines must be typed before they are
+  // needed; exhausted input raises EOFError, like a real terminal at EOF.
+  let charBuf: string[] = [];
   py.setStdin({
     isatty: false,
     stdin: () => {
-      if (ci >= chars.length) return null; // EOF -> input() raises EOFError
-      return chars[ci++]!.charCodeAt(0);
+      if (charBuf.length === 0) {
+        const line = io.takeLine();
+        if (line === null) return null; // EOF -> input() raises EOFError
+        charBuf = `${line}\n`.split("");
+      }
+      return charBuf.shift()!.charCodeAt(0);
     },
   });
   try {
@@ -307,9 +484,11 @@ async function runPythonLocally(
 export default function PlaygroundPage({
   tk,
   isMobile,
+  dark,
 }: {
   tk: PlaygroundTheme;
   isMobile: boolean;
+  dark: boolean;
 }) {
   const [language, setLanguage] = useState("javascript");
   const langDef = useMemo(
@@ -323,20 +502,99 @@ export default function PlaygroundPage({
     defaultFilename(LANGUAGES[0].id, LANGUAGES[0].extension)
   );
   const [filenameTouched, setFilenameTouched] = useState(false);
-  const [stdin, setStdin] = useState("");
-  const [showStdin, setShowStdin] = useState(false);
   const [status, setStatus] = useState<RunStatus>("idle");
   const [result, setResult] = useState<RunResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [termCopied, setTermCopied] = useState(false);
+  // Dedicated stdin box: one input line per row, fed in order.
+  const [stdinText, setStdinText] = useState("");
   const [elapsed, setElapsed] = useState(0);
-  const [runNote, setRunNote] = useState<string | null>(null);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const gutterRef = useRef<HTMLDivElement>(null);
+  /* ── Terminal state ── */
+  const [transcript, setTranscript] = useState<TLine[]>([]);
+  const [termInput, setTermInput] = useState("");
+  const [waiting, setWaiting] = useState(false);
+  const queueRef = useRef<string[]>([]);
+  const waitersRef = useRef<((line: string) => void)[]>([]);
+  const tId = useRef(0);
+  const termScrollRef = useRef<HTMLDivElement>(null);
+  const termInputRef = useRef<HTMLInputElement>(null);
+
+  /* ── Interactive runner session (live process on the backend) ── */
+  const sessionRef = useRef<{ id: string } | null>(null);
+  const [sessionActive, setSessionActive] = useState(false);
+  // Live-runner reachability: checked on mount, cached 60s, click dot to re-check.
+  const [runner, setRunner] = useState<{ ok: boolean; langs: string[]; at: number } | null>(null);
+  const offRef = useRef({ so: 0, se: 0 });
+  const remOutRef = useRef("");
+  const remErrRef = useRef("");
+  const [pendingOut, setPendingOut] = useState("");
+  const [pendingErr, setPendingErr] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const pushT = useCallback((kind: TLineKind, text: string) => {
+    const id = ++tId.current;
+    setTranscript((prev) => {
+      const next = [...prev, { id, kind, text }];
+      return next.length > 2000 ? next.slice(next.length - 2000) : next;
+    });
+  }, []);
+
+  // Auto-scroll the terminal as output arrives.
+  useEffect(() => {
+    const el = termScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [transcript, pendingOut, pendingErr]);
+
+  // When a running program asks for input, bring focus to the terminal line.
+  useEffect(() => {
+    if (waiting) termInputRef.current?.focus({ preventScroll: true });
+  }, [waiting]);
+
+  /** Submit a line typed in the terminal. With a live runner session it is
+   *  streamed straight into the running program's stdin; otherwise it
+   *  resolves a waiting local program first, or is queued for the next read. */
+  const submitTermLine = useCallback(
+    (raw: string) => {
+      const line = raw.replace(/\r$/, "");
+      const sess = sessionRef.current;
+      if (sess) {
+        // Real-terminal echo: when the program left a prompt without a
+        // trailing newline ("Enter your name: "), keystrokes land on that
+        // same line. Otherwise (typeahead) they echo on their own line.
+        if (remOutRef.current !== "") {
+          const merged = remOutRef.current + line;
+          remOutRef.current = "";
+          setPendingOut("");
+          pushT("out", merged);
+        } else {
+          pushT("in", line);
+        }
+        void (async () => {
+          try {
+            const res = await postExec("/input", { session_id: sess.id, line }, 8000);
+            if (!res.ok) pushT("err", res.data?.error || "Runner rejected the input.");
+          } catch {
+            pushT("err", "Could not reach the runner.");
+          }
+        })();
+        return;
+      }
+      pushT("in", line);
+      const waiter = waitersRef.current.shift();
+      if (waiter) {
+        if (waitersRef.current.length === 0) setWaiting(false);
+        waiter(line);
+      } else {
+        queueRef.current.push(line);
+      }
+    },
+    [pushT]
+  );
+
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load persisted code when language changes.
+  // Load persisted code + stdin when language changes.
   useEffect(() => {
     try {
       const saved = localStorage.getItem(storageKey(language));
@@ -344,10 +602,14 @@ export default function PlaygroundPage({
     } catch {
       setCode(langDef.defaultCode);
     }
+    try {
+      setStdinText(localStorage.getItem(stdinKey(language)) ?? "");
+    } catch {
+      setStdinText("");
+    }
     setFilename(defaultFilename(language, langDef.extension));
     setFilenameTouched(false);
     setResult(null);
-    setError(null);
     setStatus("idle");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [language]);
@@ -363,6 +625,18 @@ export default function PlaygroundPage({
     }, 400);
     return () => clearTimeout(t);
   }, [code, language]);
+
+  // Persist stdin edits (debounced via effect).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(stdinKey(language), stdinText);
+      } catch {
+        /* storage full / private mode — ignore */
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [stdinText, language]);
 
   useEffect(() => {
     return () => {
@@ -393,34 +667,333 @@ export default function PlaygroundPage({
     }
   }, []);
 
+  /* ── Live runner session (interactive backend) ── */
+
+  const checkRunner = useCallback(async (timeoutMs = 5000): Promise<boolean> => {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const r = await fetch("/api/proxy/exec/languages", { signal: ctrl.signal });
+        if (!r.ok) throw new Error(`runner check (${r.status})`);
+        const d = (await r.json().catch(() => ({}))) as {
+          supported?: Record<string, boolean>;
+        };
+        const supported = d?.supported ?? {};
+        const langs = Object.keys(supported).filter((k) => supported[k]);
+        setRunner({ ok: true, langs, at: Date.now() });
+        return true;
+      } finally {
+        clearTimeout(t);
+      }
+    } catch {
+      setRunner({ ok: false, langs: [], at: Date.now() });
+      return false;
+    }
+  }, []);
+
+  // Probe the runner on mount so the header dot reflects reality.
+  useEffect(() => {
+    void checkRunner();
+  }, [checkRunner]);
+
+  const postExec = useCallback(async (path: string, body: unknown, timeoutMs: number) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(`/api/proxy/exec${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      const data = await r.json().catch(() => ({}));
+      return { ok: r.ok, status: r.status, data };
+    } finally {
+      clearTimeout(t);
+    }
+  }, []);
+
+  /** Append a streamed chunk, splitting off complete lines. Prompts without
+   *  a trailing newline ("Enter your name: ") stay visible as pending text. */
+  const ingest = useCallback(
+    (kind: "out" | "err", chunk: string) => {
+      if (!chunk) return;
+      const remRef = kind === "out" ? remOutRef : remErrRef;
+      const setP = kind === "out" ? setPendingOut : setPendingErr;
+      const parts = (remRef.current + chunk).split("\n");
+      remRef.current = parts.pop() ?? "";
+      setP(remRef.current);
+      for (const l of parts) pushT(kind, l.replace(/\r$/, ""));
+    },
+    [pushT]
+  );
+
+  const endSession = useCallback(
+    (
+      sid: string,
+      outcome: "success" | "error",
+      startedAt: number,
+      last?: { exit_code?: number | null; truncated?: boolean }
+    ) => {
+      if (sessionRef.current?.id !== sid) return;
+      sessionRef.current = null;
+      setSessionActive(false);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      if (last?.truncated) pushT("sys", "output truncated (256KB cap)");
+      if (remOutRef.current !== "") {
+        pushT("out", remOutRef.current);
+        remOutRef.current = "";
+        setPendingOut("");
+      }
+      if (remErrRef.current !== "") {
+        pushT("err", remErrRef.current);
+        remErrRef.current = "";
+        setPendingErr("");
+      }
+      setWaiting(false);
+      pushT("sys", `exit ${last?.exit_code ?? "?"} · ${Date.now() - startedAt} ms`);
+      setStatus(outcome);
+      stopTimer();
+    },
+    [pushT, stopTimer]
+  );
+
+  const killSession = useCallback(() => {
+    const s = sessionRef.current;
+    if (!s) return;
+    pushT("sys", "stopping…");
+    void (async () => {
+      try {
+        await postExec("/kill", { session_id: s.id }, 5000);
+      } catch {
+        /* the poll loop finalizes the run */
+      }
+    })();
+  }, [postExec, pushT]);
+
+  /**
+   * Try a live interactive run on the backend. Returns "session" when a live
+   * process now owns the run, "handled" when it finished inline (compile
+   * error), or null when the backend can't do it — caller falls back to the
+   * batch engines (Pyodide / Godbolt) with queued stdin.
+   */
+  const startInteractive = useCallback(
+    async (startedAt: number, boxLines: string[]): Promise<"session" | "handled" | null> => {
+      let res;
+      try {
+        res = await postExec("/start", { language, code, filename }, 12000);
+      } catch {
+        return null;
+      }
+      if (!res.ok) return null;
+      const data = res.data as {
+        session_id?: string;
+        state?: string;
+        compile_output?: string;
+        exit_code?: number | null;
+        runtime?: string;
+      };
+      if (data.state === "failed") {
+        if (data.compile_output)
+          data.compile_output.split("\n").forEach((l) => pushT("warn", l));
+        pushT("sys", `exit ${data.exit_code ?? 1} · ${Date.now() - startedAt} ms`);
+        setResult({
+          stdout: "",
+          stderr: "",
+          compile_output: data.compile_output ?? "",
+          exit_code: data.exit_code ?? 1,
+          runtime: data.runtime ?? `${language} (interactive)`,
+          time_ms: Date.now() - startedAt,
+        });
+        setStatus("error");
+        stopTimer();
+        return "handled";
+      }
+      if (data.state !== "running" || !data.session_id) return null;
+
+      const sid = data.session_id;
+      sessionRef.current = { id: sid };
+      setSessionActive(true);
+      offRef.current = { so: 0, se: 0 };
+      remOutRef.current = "";
+      remErrRef.current = "";
+      setPendingOut("");
+      setPendingErr("");
+      setResult({
+        stdout: "",
+        stderr: "",
+        compile_output: data.compile_output ?? "",
+        exit_code: null,
+        runtime: data.runtime ?? `${language} (interactive)`,
+      });
+      // INPUT box lines go in first, then lines typed in the terminal.
+      // (Piped stdin isn't echoed — like `< input.txt` in a real shell;
+      // only keystrokes typed live in the terminal echo.)
+      const pre = [...boxLines, ...queueRef.current];
+      queueRef.current = [];
+      for (const line of pre) {
+        try {
+          await postExec("/input", { session_id: sid, line }, 5000);
+        } catch {
+          /* poll loop surfaces runner problems */
+        }
+      }
+      if (boxLines.length > 0)
+        pushT("sys", `${boxLines.length} stdin line(s) piped from INPUT box — type below to interact live.`);
+      const pollOnce = async () => {
+        if (sessionRef.current?.id !== sid) return;
+        let r: {
+          state?: string;
+          stdout?: string;
+          stderr?: string;
+          so?: number;
+          se?: number;
+          exit_code?: number | null;
+          truncated?: boolean;
+          error?: string;
+        };
+        try {
+          const { so, se } = offRef.current;
+          const resp = await fetch(`/api/proxy/exec/poll/${sid}?so=${so}&se=${se}`);
+          r = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(r?.error || `poll failed (${resp.status})`);
+        } catch (e) {
+          if (sessionRef.current?.id !== sid) return;
+          pushT("err", e instanceof Error ? e.message : "Lost connection to the runner.");
+          endSession(sid, "error", startedAt, {});
+          return;
+        }
+        if (sessionRef.current?.id !== sid) return;
+        if (typeof r.so === "number" && typeof r.se === "number")
+          offRef.current = { so: r.so, se: r.se };
+        ingest("out", r.stdout ?? "");
+        ingest("err", r.stderr ?? "");
+        if (r.state && r.state !== "running") {
+          const failed =
+            r.state === "timeout" ||
+            r.state === "failed" ||
+            (r.exit_code ?? 0) !== 0;
+          endSession(sid, failed ? "error" : "success", startedAt, r);
+        }
+      };
+      void pollOnce();
+      pollRef.current = setInterval(() => void pollOnce(), 250);
+      if (!isMobile) termInputRef.current?.focus({ preventScroll: true });
+      return "session";
+    },
+    [postExec, language, code, filename, pushT, ingest, endSession, stopTimer, isMobile]
+  );
+
+  // If the page unmounts mid-run, stop the backend process too.
+  useEffect(() => {
+    return () => {
+      const s = sessionRef.current;
+      sessionRef.current = null;
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (s) {
+        void fetch("/api/proxy/exec/kill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: s.id }),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+  }, []);
+
   const run = useCallback(async () => {
     if (status === "running") return;
     if (!code.trim()) {
-      setError("Write some code first, then hit Run.");
+      pushT("err", "Write some code first, then hit Run.");
       return;
     }
+    // stdin = INPUT box lines first, then anything queued in the terminal.
+    const rawBox = stdinText.replace(/\r\n?/g, "\n");
+    const boxLines: string[] = [];
+    if (rawBox.trim() !== "") {
+      boxLines.push(...rawBox.split("\n"));
+      if (boxLines.length > 0 && boxLines[boxLines.length - 1] === "") boxLines.pop();
+    }
+    // If the program reads stdin but nothing was provided anywhere, hint
+    // once and keep going — it will see end-of-input on the batch engines.
+    if (queueRef.current.length === 0 && boxLines.length === 0 && readsStdin(code, language)) {
+      pushT(
+        "sys",
+        `reads input (${INPUT_HINT[language] ?? "stdin"}) — put it in the INPUT box above, or type it in the terminal. JS reads it live mid-run.`
+      );
+    }
     setStatus("running");
-    setError(null);
     setResult(null);
-    setRunNote(null);
+    setWaiting(false);
+    waitersRef.current = [];
     setElapsed(0);
     const t0 = Date.now();
     timerRef.current = setInterval(() => setElapsed(Date.now() - t0), 100);
 
-    const runRemote = async () => {
-      const r = await fetch("/api/playground", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language, code, stdin, filename }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        throw new Error(data?.error || `Execution failed (${r.status})`);
+    const runFile = filename || `main.${langDef.extension}`;
+    const runCmd = RUN_CMD[language] ?? "run";
+    pushT("cmd", `$ ${runCmd} ${runFile}`);
+    const startedAt = Date.now();
+
+    // Live interactive process first (true mid-run input, prompts included).
+    // The runner check is cached 60s so a dead backend fails fast instead of
+    // hanging every run; without it we fall to batch engines, which get the
+    // INPUT box + queued terminal lines as stdin.
+    if (language !== "javascript") {
+      let live: boolean;
+      if (runner && Date.now() - runner.at < 60000) {
+        live = runner.ok;
+      } else {
+        pushT("sys", "checking live runner…");
+        live = await checkRunner(7000);
       }
-      return data as RunResult;
+      if (live) {
+        const mode = await startInteractive(startedAt, boxLines);
+        if (mode !== null) return;
+        pushT("sys", "live run failed — batch mode (pre-typed stdin only).");
+      } else {
+        pushT("sys", "live runner unreachable — batch mode (pre-typed stdin only).");
+      }
+      // No live runner: batch engines need every stdin line upfront and can
+      // never ask mid-run — refuse an empty run instead of crashing on EOF.
+      const probe = [...boxLines, ...queueRef.current].join("\n");
+      if (probe.trim() === "" && readsStdin(code, language)) {
+        pushT("err", `no stdin provided, but this program reads input (${INPUT_HINT[language] ?? "stdin"}).`);
+        pushT("sys", "fill the INPUT box above and press Run again.");
+        pushT("sys", "for live mid-run prompts the backend runner must be reachable (redeploy it with the new code).");
+        setStatus("error");
+        stopTimer();
+        return;
+      }
+    }
+
+    let boxIdx = 0;
+    const io: LocalRunIO = {
+      takeLine: () => {
+        if (boxIdx < boxLines.length) return boxLines[boxIdx++];
+        return queueRef.current.length > 0 ? queueRef.current.shift()! : null;
+      },
+      waitLine: () =>
+        new Promise<string>((resolve) => {
+          waitersRef.current.push(resolve);
+        }),
+      print: (text) => pushT("out", text),
+      printErr: (text) => pushT("err", text),
+      setWaiting,
     };
-    const finishRemote = (data: RunResult) => {
+
+    const finishRun = (data: RunResult, streamed: boolean) => {
       setResult(data);
+      if (!streamed) {
+        if (data.compile_output) data.compile_output.split("\n").forEach((l) => pushT("warn", l));
+        if (data.stdout) data.stdout.split("\n").forEach((l) => pushT("out", l));
+      }
+      if (data.stderr) data.stderr.split("\n").forEach((l) => pushT("err", l));
+      pushT("sys", `exit ${data.exit_code ?? "?"} · ${data.time_ms ?? Date.now() - startedAt} ms`);
       const failed =
         (data.exit_code ?? 0) !== 0 ||
         Boolean(data.stderr) ||
@@ -428,65 +1001,138 @@ export default function PlaygroundPage({
       setStatus(failed ? "error" : "success");
     };
 
+    // Backend batch engine (POST /execute): authoritative routing by the
+    // `language` field, stdin via write+close. Returns null when the backend
+    // can't serve it so the caller falls back to the cloud sandbox.
+    const runBatchBackend = async (stdinStr: string): Promise<RunResult | null> => {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 45000);
+        let r: Response;
+        let data: {
+          success?: boolean; stdout?: string; stderr?: string;
+          compile_output?: string; exit_code?: number | null;
+          execution_time?: number; error_type?: string | null; language?: string;
+        };
+        try {
+          r = await fetch("/api/proxy/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ language, code, stdin: stdinStr, filename, timeout: 15 }),
+            signal: ctrl.signal,
+          });
+          data = await r.json().catch(() => ({}));
+        } finally {
+          clearTimeout(t);
+        }
+        if (!r.ok) return null;
+        return {
+          stdout: data.stdout ?? "",
+          stderr: data.stderr ?? "",
+          compile_output: data.compile_output ?? "",
+          exit_code: data.exit_code ?? null,
+          runtime: `${data.language ?? language} (backend)`,
+          time_ms: data.execution_time != null ? Math.round(data.execution_time * 1000) : undefined,
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    // Browser engines consume stdin progressively; batch engines get one
+    // snapshot: INPUT box lines first, then queued terminal lines.
+    const takeStdinSnapshot = (): string => {
+      const snap = [...boxLines, ...queueRef.current].join("\n");
+      queueRef.current = [];
+      return snap;
+    };
+
+    // Browser engines consume the queued terminal lines progressively;
+    // remote toolchains get a snapshot taken at Run time.
+    const runRemote = async (stdinStr: string) => {
+      const r = await fetch("/api/playground", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language, code, stdin: stdinStr, filename }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(data?.error || `Execution failed (${r.status})`);
+      }
+      return data as RunResult;
+    };
+
     try {
       if (language === "javascript") {
-        const res = await runJavaScriptLocally(code);
-        setResult(res);
-        setStatus(res.exit_code === 0 ? "success" : "error");
+        finishRun(await runJavaScriptLocally(code, io), true);
       } else if (language === "python") {
         // Prefer in-browser Pyodide (instant, no rate limits); fall back
-        // to the server sandbox if the runtime can't load.
+        // to the backend batch engine, then the cloud sandbox.
         try {
-          const res = await runPythonLocally(code, stdin, (m) => setRunNote(m));
-          setRunNote(null);
-          setResult(res);
-          setStatus(res.exit_code === 0 ? "success" : "error");
+          finishRun(await runPythonLocally(code, io, (m) => pushT("sys", m)), true);
         } catch (e) {
-          setRunNote("Browser Python unavailable — using cloud sandbox…");
-          finishRemote(await runRemote());
+          pushT("sys", "Browser Python unavailable — trying backends…");
+          const snap = takeStdinSnapshot();
+          const batched = await runBatchBackend(snap);
+          if (batched) {
+            finishRun(batched, false);
+          } else {
+            pushT("sys", "backend unreachable — cloud-sandbox fallback.");
+            finishRun(await runRemote(snap), false);
+          }
         }
       } else {
-        finishRemote(await runRemote());
+        const snap = takeStdinSnapshot();
+        const batched = await runBatchBackend(snap);
+        if (batched) {
+          finishRun(batched, false);
+        } else {
+          pushT("sys", "backend unreachable — cloud-sandbox fallback.");
+          finishRun(await runRemote(snap), false);
+        }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong while running your code.");
+      const msg = e instanceof Error ? e.message : "Something went wrong while running your code.";
+      pushT("err", msg);
       setStatus("error");
     } finally {
-      setRunNote(null);
+      setWaiting(false);
+      waitersRef.current = [];
+      queueRef.current = [];
       stopTimer();
     }
-  }, [code, language, stdin, filename, status, stopTimer]);
+  }, [code, language, filename, langDef, status, stopTimer, pushT, startInteractive, stdinText, runner, checkRunner]);
 
-  // Ctrl/Cmd + Enter to run.
-  const onKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-        e.preventDefault();
-        void run();
-        return;
-      }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const el = textareaRef.current;
-        if (!el) return;
-        const { selectionStart: s, selectionEnd: en, value } = el;
-        const next = value.slice(0, s) + "  " + value.slice(en);
-        setCode(next);
-        requestAnimationFrame(() => {
-          el.selectionStart = el.selectionEnd = s + 2;
-        });
-      }
-    },
-    [run]
-  );
-
-  const syncScroll = useCallback(() => {
-    const ta = textareaRef.current;
-    const g = gutterRef.current;
-    if (ta && g) {
-      g.scrollTop = ta.scrollTop;
-    }
+  // Ctrl/Cmd + Enter is bound inside Monaco (see CodeEditor).
+  // Stable callback so the editor binding never goes stale.
+  const runRef = useRef(run);
+  runRef.current = run;
+  const handleEditorRun = useCallback(() => {
+    void runRef.current();
   }, []);
+
+  const focusTerminal = useCallback(() => {
+    termInputRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const clearTerminal = useCallback(() => {
+    setTranscript([]);
+    queueRef.current = [];
+  }, []);
+
+  const copyTerminal = useCallback(async () => {
+    const text = [...transcript.map((l) => l.text), pendingOut, pendingErr]
+      .filter((t) => t !== "")
+      .join("\n");
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setTermCopied(true);
+      setTimeout(() => setTermCopied(false), 1800);
+    } catch {
+      pushT("err", "Could not copy to clipboard in this browser.");
+    }
+  }, [transcript, pendingOut, pendingErr, pushT]);
 
   const lineCount = useMemo(() => code.split("\n").length, [code]);
 
@@ -494,14 +1140,18 @@ export default function PlaygroundPage({
     setCode(langDef.defaultCode);
     setFilename(defaultFilename(language, langDef.extension));
     setFilenameTouched(false);
+    setStdinText("");
     try {
       localStorage.removeItem(storageKey(language));
+      localStorage.removeItem(stdinKey(language));
     } catch {
       /* ignore */
     }
     setResult(null);
-    setError(null);
     setStatus("idle");
+    queueRef.current = [];
+    waitersRef.current = [];
+    setWaiting(false);
   }, [langDef, language]);
 
   const copyCode = useCallback(async () => {
@@ -510,9 +1160,9 @@ export default function PlaygroundPage({
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      setError("Could not copy to clipboard in this browser.");
+      pushT("err", "Could not copy to clipboard in this browser.");
     }
-  }, [code]);
+  }, [code, pushT]);
 
   const download = useCallback(() => {
     const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
@@ -535,9 +1185,33 @@ export default function PlaygroundPage({
         ? tk.roseBorder
         : tk.border;
 
-  const hasOutput =
-    result &&
-    (result.stdout || result.stderr || result.compile_output || result.exit_code !== null);
+  const termPlaceholder =
+    status === "running"
+      ? sessionActive || waiting || language === "javascript"
+        ? "Type input, Enter to send it to the program…"
+        : "Running… you can queue the next input line here…"
+      : readsStdin(code, language)
+        ? `Type input for ${INPUT_HINT[language] ?? "stdin"}, Enter to queue, then Run…`
+        : "Type here if the program needs input, Enter to queue…";
+
+  // Fixed palette: the terminal body is always dark, like a real console.
+  const lineStyle = (kind: TLineKind) => {
+    const mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    switch (kind) {
+      case "cmd":
+        return { color: "#7ee787", fontWeight: 700, fontFamily: mono };
+      case "in":
+        return { color: "#79c0ff", fontFamily: mono };
+      case "err":
+        return { color: "#ffa198", fontFamily: mono };
+      case "warn":
+        return { color: "#d29922", fontFamily: mono };
+      case "sys":
+        return { color: "#8b949e", fontStyle: "italic", fontFamily: mono };
+      default:
+        return { color: "#e6edf3", fontFamily: mono };
+    }
+  };
 
   return (
     <div style={{ paddingTop: 8 }}>
@@ -567,9 +1241,11 @@ export default function PlaygroundPage({
           Write code. Run it. See output.
         </h1>
         <p style={{ fontSize: 14, color: tk.text2, lineHeight: 1.7, maxWidth: 640 }}>
-          An in-browser playground built into DevIQ — JavaScript and Python run
-          instantly on your device, and TypeScript, Java, C, C++, Go, Rust,
-          Kotlin, C# and Ruby run on a sandboxed cloud toolchain. Press{" "}
+          An in-browser playground built into DevIQ — JavaScript runs instantly
+          on your device, and Python, Java, C, C++, Go and TypeScript run
+          interactively: the program can prompt you mid-run and you answer
+          right in the terminal. (If the live runner is unreachable, runs fall
+          back to the browser / cloud sandbox with pre-typed input.) Press{" "}
           <kbd
             style={{
               fontFamily: "monospace",
@@ -618,7 +1294,7 @@ export default function PlaygroundPage({
           {LANGUAGES.map((l) => (
             <option key={l.id} value={l.id}>
               {l.label}
-              {l.id === "javascript" ? "  ·  instant" : l.id === "python" ? "  ·  browser" : ""}
+              {l.id === "javascript" ? "  ·  instant" : LIVE_LANGS.includes(l.id) ? "  ·  interactive" : ""}
             </option>
           ))}
         </select>
@@ -628,12 +1304,12 @@ export default function PlaygroundPage({
             fontWeight: 600,
             padding: "3px 9px",
             borderRadius: 20,
-            border: `1px solid ${language === "javascript" || language === "python" ? tk.greenBorder : tk.blueBorder}`,
-            background: language === "javascript" || language === "python" ? tk.greenLight : tk.blueLight,
-            color: language === "javascript" || language === "python" ? tk.green : tk.blue,
+            border: `1px solid ${language === "javascript" ? tk.greenBorder : LIVE_LANGS.includes(language) ? tk.blueBorder : tk.purpleBorder}`,
+            background: language === "javascript" ? tk.greenLight : LIVE_LANGS.includes(language) ? tk.blueLight : tk.purpleLight,
+            color: language === "javascript" ? tk.green : LIVE_LANGS.includes(language) ? tk.blue : tk.purple,
           }}
         >
-          {language === "javascript" || language === "python" ? "Runs locally" : "Runs in sandbox"}
+          {language === "javascript" ? "Runs locally" : LIVE_LANGS.includes(language) ? "Interactive" : "Runs in sandbox"}
         </span>
         <label htmlFor="deviq-playground-file" style={{ fontSize: 12, color: tk.text3, fontWeight: 500 }}>
           File
@@ -664,21 +1340,6 @@ export default function PlaygroundPage({
           }}
         />
         <div style={{ flex: 1 }} />
-        <button
-          onClick={() => setShowStdin((s) => !s)}
-          style={{
-            padding: "7px 13px",
-            borderRadius: 8,
-            border: `1px solid ${tk.border}`,
-            background: showStdin ? tk.bgAlt : tk.surface,
-            color: tk.text2,
-            fontSize: 12,
-            fontWeight: 500,
-            cursor: "pointer",
-          }}
-        >
-          {showStdin ? "Hide stdin" : "Add stdin"}
-        </button>
         <button
           onClick={copyCode}
           style={{
@@ -725,21 +1386,32 @@ export default function PlaygroundPage({
           Reset
         </button>
         <button
-          onClick={() => void run()}
-          disabled={status === "running"}
+          onClick={() => {
+            if (status === "running") {
+              if (sessionRef.current) killSession();
+              return;
+            }
+            void run();
+          }}
+          disabled={status === "running" && !sessionActive}
+          title={status === "running" && sessionActive ? "Stop the running program" : "Run the program"}
           style={{
             padding: "8px 22px",
             borderRadius: 8,
             border: "none",
-            background: status === "running" ? tk.track : tk.accent,
+            background: status === "running" ? (sessionActive ? tk.rose : tk.track) : tk.accent,
             color: tk.accentFg,
             fontSize: 13,
             fontWeight: 700,
-            cursor: status === "running" ? "wait" : "pointer",
-            opacity: status === "running" ? 0.7 : 1,
+            cursor: status === "running" && !sessionActive ? "wait" : "pointer",
+            opacity: status === "running" && !sessionActive ? 0.7 : 1,
           }}
         >
-          {status === "running" ? `Running… ${(elapsed / 1000).toFixed(1)}s` : "▶  Run"}
+          {status === "running"
+            ? sessionActive
+              ? "■ Stop"
+              : `Running… ${(elapsed / 1000).toFixed(1)}s`
+            : "▶  Run"}
         </button>
       </div>
 
@@ -749,54 +1421,86 @@ export default function PlaygroundPage({
         </div>
       )}
 
-      {showStdin && (
+      {/* INPUT / STDIN — one value per line, fed to the program in order */}
+      <div
+        style={{
+          marginBottom: 12,
+          background: tk.surface,
+          border: `1px solid ${tk.border}`,
+          borderRadius: 10,
+          boxShadow: tk.shadow,
+          overflow: "hidden",
+        }}
+      >
         <div
           style={{
-            marginBottom: 12,
-            background: tk.surface,
-            border: `1px solid ${tk.border}`,
-            borderRadius: 10,
-            overflow: "hidden",
-            boxShadow: tk.shadow,
+            padding: "10px 14px",
+            borderBottom: `1px solid ${tk.border}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
           }}
         >
-          <div
-            style={{
-              padding: "9px 14px",
-              borderBottom: `1px solid ${tk.border}`,
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: "0.05em",
-              textTransform: "uppercase",
-              color: tk.text3,
-            }}
-          >
-            Standard input (stdin) — fed to your program
-          </div>
-          <textarea
-            value={stdin}
-            onChange={(e) => setStdin(e.target.value)}
-            placeholder={"One value per line, e.g.\n5\n10"}
-            rows={3}
-            spellCheck={false}
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              border: "none",
-              outline: "none",
-              resize: "vertical",
-              background: "transparent",
-              color: tk.text,
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-              fontSize: 13,
-              lineHeight: 1.6,
-              padding: "12px 14px",
-            }}
-          />
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: tk.text3 }}>
+            Input · stdin
+          </span>
+          <span style={{ fontSize: 12, color: tk.text3 }}>
+            lines are fed to <span style={{ fontFamily: "monospace" }}>{INPUT_HINT[language] ?? "stdin"}</span> in order
+            {LIVE_LANGS.includes(language) && language !== "javascript"
+              ? " — during live runs you can also type in the terminal"
+              : ""}
+          </span>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 11, color: tk.text3, fontVariantNumeric: "tabular-nums" }}>
+            {stdinText ? `${stdinText.replace(/\r\n?/g, "\n").split("\n").length} lines` : "empty"}
+          </span>
+          {stdinText && (
+            <button
+              onClick={() => setStdinText("")}
+              style={{
+                padding: "4px 11px",
+                borderRadius: 7,
+                border: `1px solid ${tk.border}`,
+                background: tk.bgAlt,
+                color: tk.text2,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Clear
+            </button>
+          )}
         </div>
-      )}
+        <textarea
+          value={stdinText}
+          onChange={(e) => setStdinText(e.target.value)}
+          placeholder={`One input per line, in the order the program reads it.\nExample:\nSaket\n21\n90`}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          aria-label="Program input (stdin), one value per line"
+          rows={3}
+          style={{
+            display: "block",
+            width: "100%",
+            boxSizing: "border-box",
+            minHeight: 66,
+            padding: "10px 14px",
+            background: tk.bgAlt,
+            border: "none",
+            outline: "none",
+            resize: "vertical",
+            color: tk.text,
+            fontSize: 13,
+            lineHeight: 1.7,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          }}
+        />
+      </div>
 
-      {/* EDITOR + OUTPUT */}
+      {/* EDITOR + TERMINAL */}
       <div
         style={{
           display: "grid",
@@ -838,61 +1542,19 @@ export default function PlaygroundPage({
               {lineCount} lines · {code.length} chars
             </span>
           </div>
-          <div style={{ display: "flex", flex: 1, minHeight: 380, position: "relative" }}>
-            <div
-              ref={gutterRef}
-              aria-hidden
-              style={{
-                width: 52,
-                flexShrink: 0,
-                overflow: "hidden",
-                background: tk.bgAlt,
-                borderRight: `1px solid ${tk.border}`,
-                padding: "14px 8px 14px 0",
-                textAlign: "right",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                fontSize: 13,
-                lineHeight: 1.65,
-                color: tk.text3,
-                userSelect: "none",
-              }}
-            >
-              {Array.from({ length: lineCount }, (_, i) => (
-                <div key={i + 1}>{i + 1}</div>
-              ))}
-            </div>
-            <textarea
-              ref={textareaRef}
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={onKeyDown}
-              onScroll={syncScroll}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              wrap="off"
-              aria-label="Code editor"
-              placeholder="// Write code here, then press Ctrl + Enter to run"
-              style={{
-                flex: 1,
-                border: "none",
-                outline: "none",
-                resize: "none",
-                background: "transparent",
-                color: tk.text,
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                fontSize: 13,
-                lineHeight: 1.65,
-                padding: "14px 16px",
-                whiteSpace: "pre",
-                overflow: "auto",
-                minHeight: 380,
-              }}
+          <div style={{ padding: "6px 0 0" }}>
+            <CodeEditor
+              language={language}
+              code={code}
+              onChange={setCode}
+              onRun={handleEditorRun}
+              dark={dark}
+              height={isMobile ? 380 : 420}
             />
           </div>
         </div>
 
-        {/* Output */}
+        {/* Terminal — code compiles & runs here; program input is typed here too */}
         <div
           style={{
             background: tk.surface,
@@ -915,8 +1577,36 @@ export default function PlaygroundPage({
             }}
           >
             <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: tk.text3 }}>
-              Output
+              Terminal
             </span>
+            <button
+              onClick={() => void checkRunner()}
+              title={
+                !runner
+                  ? "Checking live runner… (click to re-check)"
+                  : runner.ok
+                    ? `Live runner connected (${runner.langs.join(", ") || "no toolchains"}) — click to re-check`
+                    : "Live runner unreachable — mid-run prompts unavailable, batch only. Click to re-check."
+              }
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "3px 10px",
+                borderRadius: 20,
+                border: `1px solid ${tk.border}`,
+                background: tk.bgAlt,
+                color: tk.text2,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ fontSize: 9, color: !runner ? tk.text3 : runner.ok ? "#3fb950" : "#f85149" }}>
+                ●
+              </span>
+              {!runner ? "…" : runner.ok ? "Live" : "Offline"}
+            </button>
             <div style={{ flex: 1 }} />
             <span
               style={{
@@ -929,200 +1619,164 @@ export default function PlaygroundPage({
                 color: statusColor,
                 textTransform: "uppercase",
                 letterSpacing: "0.04em",
+                fontVariantNumeric: "tabular-nums",
               }}
             >
-              {status === "running" ? "Running" : status}
+              {status === "running" ? `Running ${(elapsed / 1000).toFixed(1)}s` : status}
             </span>
             {result?.runtime && (
               <span style={{ fontSize: 11, color: tk.text3, fontFamily: "monospace" }}>
                 {result.runtime}
               </span>
             )}
+            <button
+              onClick={() => void copyTerminal()}
+              title="Copy the terminal contents"
+              style={{
+                padding: "4px 11px",
+                borderRadius: 7,
+                border: `1px solid ${tk.border}`,
+                background: tk.bgAlt,
+                color: tk.text2,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {termCopied ? "Copied ✓" : "Copy"}
+            </button>
+            <button
+              onClick={clearTerminal}
+              title="Clear the terminal"
+              style={{
+                padding: "4px 11px",
+                borderRadius: 7,
+                border: `1px solid ${tk.border}`,
+                background: tk.bgAlt,
+                color: tk.text2,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Clear
+            </button>
           </div>
 
-          <div style={{ flex: 1, padding: 14, overflowY: "auto", maxHeight: 520 }}>
-            {status === "running" && (
-              <div style={{ color: tk.text3, fontSize: 13 }}>
-                <div style={{ marginBottom: 8 }}>{runNote || "Executing your code…"}</div>
-                <div style={{ height: 3, borderRadius: 3, background: tk.track, overflow: "hidden" }}>
-                  <div
-                    style={{
-                      height: "100%",
-                      width: "40%",
-                      borderRadius: 3,
-                      background: tk.blue,
-                      animation: "deviq-slide 1s ease-in-out infinite alternate",
-                    }}
-                  />
-                </div>
-                <style>{`@keyframes deviq-slide{from{margin-left:0}to{margin-left:60%}}`}</style>
-              </div>
-            )}
-
-            {error && status !== "running" && (
-              <div
-                style={{
-                  background: tk.roseLight,
-                  border: `1px solid ${tk.roseBorder}`,
-                  borderRadius: 8,
-                  padding: "12px 14px",
-                  color: tk.rose,
-                  fontSize: 13,
-                  lineHeight: 1.6,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}
-              >
-                {error}
-              </div>
-            )}
-
-            {status === "idle" && !result && !error && (
-              <div style={{ color: tk.text3, fontSize: 13, lineHeight: 1.7 }}>
-                No output yet.
-                <br />
-                Write code on the left and press{" "}
-                <strong style={{ color: tk.text2 }}>Run</strong> (or{" "}
-                <kbd
-                  style={{
-                    fontFamily: "monospace",
-                    fontSize: 12,
-                    background: tk.bgAlt,
-                    border: `1px solid ${tk.border}`,
-                    borderRadius: 5,
-                    padding: "1px 6px",
-                  }}
-                >
-                  Ctrl + Enter
-                </kbd>
-                ).
-                <br />
-                <br />
-                stdout, errors, exit code and timing will appear here.
-              </div>
-            )}
-
-            {result && status !== "running" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {result.compile_output ? (
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: tk.amber, marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                      Compile output
-                    </div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        background: tk.amberLight,
-                        border: `1px solid ${tk.amberBorder}`,
-                        borderRadius: 8,
-                        padding: "10px 12px",
-                        fontSize: 12.5,
-                        lineHeight: 1.6,
-                        color: tk.text,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                      }}
-                    >
-                      {result.compile_output}
-                    </pre>
-                  </div>
-                ) : null}
-
-                {result.stdout ? (
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: tk.green, marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                      stdout
-                    </div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        background: tk.bgAlt,
-                        border: `1px solid ${tk.border}`,
-                        borderRadius: 8,
-                        padding: "10px 12px",
-                        fontSize: 12.5,
-                        lineHeight: 1.6,
-                        color: tk.text,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                      }}
-                    >
-                      {result.stdout}
-                    </pre>
-                  </div>
-                ) : null}
-
-                {result.stderr ? (
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: tk.rose, marginBottom: 6, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-                      stderr / errors
-                    </div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        background: tk.roseLight,
-                        border: `1px solid ${tk.roseBorder}`,
-                        borderRadius: 8,
-                        padding: "10px 12px",
-                        fontSize: 12.5,
-                        lineHeight: 1.6,
-                        color: tk.rose,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-                      }}
-                    >
-                      {result.stderr}
-                    </pre>
-                  </div>
-                ) : null}
-
-                {!hasOutput && (
-                  <div style={{ fontSize: 13, color: tk.text3 }}>
-                    Program ran with no output. Try printing something!
-                  </div>
+          <div
+            ref={termScrollRef}
+            onClick={focusTerminal}
+            style={{
+              flex: 1,
+              height: isMobile ? 320 : 380,
+              maxHeight: 520,
+              overflowY: "auto",
+              padding: "12px 14px",
+              background: "#0d1117",
+              fontSize: 12.5,
+              lineHeight: 1.65,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              cursor: "text",
+            }}
+          >
+            {transcript.length === 0 ? (
+              <div style={{ color: "#8b949e", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>
+                <div>$ — terminal ready. Press Run to compile &amp; execute.</div>
+                {readsStdin(code, language) ? (
+                  <div>ⓘ this program reads input ({INPUT_HINT[language] ?? "stdin"}) — type it below, press Enter, then Run.</div>
+                ) : (
+                  <div>ⓘ if your program needs input, type it below and press Enter.</div>
                 )}
-
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
-                  {result.exit_code !== null && result.exit_code !== undefined && (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: "3px 9px",
-                        borderRadius: 20,
-                        border: `1px solid ${result.exit_code === 0 ? tk.greenBorder : tk.roseBorder}`,
-                        background: result.exit_code === 0 ? tk.greenLight : tk.roseLight,
-                        color: result.exit_code === 0 ? tk.green : tk.rose,
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      exit {result.exit_code}
-                    </span>
-                  )}
-                  {result.time_ms !== null && result.time_ms !== undefined && (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: "3px 9px",
-                        borderRadius: 20,
-                        border: `1px solid ${tk.border}`,
-                        background: tk.bgAlt,
-                        color: tk.text2,
-                        fontFamily: "monospace",
-                      }}
-                    >
-                      {result.time_ms} ms
-                    </span>
-                  )}
+              </div>
+            ) : (
+              transcript.map((l) => (
+                <div key={l.id} style={lineStyle(l.kind)}>
+                  {l.kind === "in"
+                    ? `> ${l.text}`
+                    : l.kind === "sys"
+                      ? `● ${l.text}`
+                      : l.text === ""
+                        ? " "
+                        : l.text}
                 </div>
+              ))
+            )}
+            {waiting && (
+              <div style={{ color: "#79c0ff", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>
+                &gt; <span style={{ animation: "deviq-blink 1.1s ease-in-out infinite" }}>▍</span> waiting for input — type below and press Enter…
+                <style>{`@keyframes deviq-blink{0%,100%{opacity:1}50%{opacity:0.2}}`}</style>
               </div>
             )}
+            {pendingOut !== "" && (
+              <div style={lineStyle("out")}>{pendingOut}</div>
+            )}
+            {pendingErr !== "" && (
+              <div style={lineStyle("err")}>{pendingErr}</div>
+            )}
           </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (termInput === "" && status !== "running") return;
+              submitTermLine(termInput);
+              setTermInput("");
+              termInputRef.current?.focus({ preventScroll: true });
+            }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 12px",
+              borderTop: "1px solid #21262d",
+              background: "#0d1117",
+            }}
+          >
+            <span style={{ color: "#3fb950", fontWeight: 700, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>
+              &gt;
+            </span>
+            <input
+              ref={termInputRef}
+              value={termInput}
+              onChange={(e) => setTermInput(e.target.value)}
+              placeholder={termPlaceholder}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              autoComplete="off"
+              aria-label="Terminal input — type program input here"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                color: "#e6edf3",
+                fontSize: 13,
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              }}
+            />
+            <button
+              type="submit"
+              title="Send this line to the program (Enter)"
+              style={{
+                padding: "5px 12px",
+                borderRadius: 7,
+                border: "1px solid #30363d",
+                background: "#21262d",
+                color: "#e6edf3",
+                fontSize: 11.5,
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              Send ↵
+            </button>
+          </form>
         </div>
+
       </div>
 
       {/* QUICK EXAMPLES */}
@@ -1160,10 +1814,11 @@ export default function PlaygroundPage({
             gap: 4,
           }}
         >
+          <div>• VS Code-powered editing: syntax highlighting, word suggestions as you type, and <kbd style={{ fontFamily: "monospace", fontSize: 12, background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 5, padding: "1px 6px" }}>Ctrl + Space</kbd> for manual autocomplete.</div>
           <div>• JavaScript executes instantly in your browser — no network needed, console.log is captured.</div>
           <div>• Python runs in your browser too (Pyodide) — print() and input() work, numpy auto-loads on import.</div>
-          <div>• TypeScript, Java, C, C++, Go, Rust, Kotlin, C# and Ruby compile & run in a secure cloud sandbox (up to ~90s for heavy toolchains).</div>
-          <div>• Use “Add stdin” to test programs that read input. Your code auto-saves per language.</div>
+          <div>• Python, Java, C, C++, Go and TypeScript run on the live runner — prompts like <span style={{ fontFamily: "monospace" }}>Enter your name:</span> appear mid-run and you answer in the terminal. Rust, Kotlin, C# and Ruby use the cloud sandbox with pre-typed input.</div>
+          <div>• Type program input directly in the terminal — every language reads it there: <span style={{ fontFamily: "monospace" }}>prompt()</span> and <span style={{ fontFamily: "monospace" }}>input()</span> in JS/Python (JS even mid-run), <span style={{ fontFamily: "monospace" }}>Scanner</span> in Java, <span style={{ fontFamily: "monospace" }}>scanf / cin / fmt.Scan</span> and friends elsewhere. For sandboxed languages, type input lines before pressing Run. Your code auto-saves per language.</div>
         </div>
       </div>
     </div>

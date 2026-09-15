@@ -5800,7 +5800,7 @@ export default function Page() {
 
           {/* PLAYGROUND — login required, like chat/practice/review */}
           {page === "playground" && user && (
-            <PlaygroundPage tk={tk} isMobile={isMobile} />
+            <PlaygroundPage tk={tk} isMobile={isMobile} dark={dark} />
           )}
           {page === "playground" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>

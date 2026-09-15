@@ -146,8 +146,16 @@ export async function exchangeCodeForToken(
   });
 
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `OAuth exchange failed (${res.status})`);
+    const body = await res.json().catch(() => ({} as any));
+    const detail =
+      typeof body?.detail === "string"
+        ? body.detail
+        : Array.isArray(body?.detail)
+          ? body.detail.map((d: any) => d?.msg || JSON.stringify(d)).join(", ")
+          : undefined;
+    throw new Error(
+      body?.error || detail || body?.message || `OAuth exchange failed (${res.status})`
+    );
   }
 
   const data = await res.json();
@@ -155,7 +163,11 @@ export async function exchangeCodeForToken(
   const user: OAuthUser = {
     name: data.name || data.user?.name || "User",
     email: data.email || data.user?.email || "",
-    avatar: data.avatar || data.user?.picture || data.profile_picture_url,
+    avatar:
+      data.avatar ||
+      data.user?.avatar ||
+      data.user?.picture ||
+      data.profile_picture_url,
     provider,
   };
 

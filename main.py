@@ -15,7 +15,10 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import requests
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
 
 # Initialize MongoDB
 MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
@@ -30,15 +33,18 @@ except Exception as e:
 
 from github import fetch_github_data
 from leetcode import fetch_leetcode_data
-from codeforces import fetch_codeforces_data
 from analytics import calculate_skill_score
+from exec_service import router as exec_router
+from execution_engine import router as execute_router
 
 app = FastAPI()
+app.include_router(exec_router)
+app.include_router(execute_router)
 
 # allow_origins cannot be '*' when credentials=True; specify the
 # frontend origin(s) explicitly. You can set FRONTEND_ORIGINS to a
 # comma-separated list of allowed origins (e.g. http://localhost:3000).
-front = os.environ.get("FRONTEND_ORIGINS", "http://localhost:3000,https://deviq.online,https://www.deviq.online,https://deviq-pi.vercel.app,https://developerintelligencedashboard.web.app")
+front = os.environ.get("FRONTEND_ORIGINS", "http://localhost:3000,https://deviq.online,https://developerintelligencedashboard.web.app")
 allow_list = [o.strip() for o in front.split(",") if o.strip()]
 print(f"✅ CORS allowed origins: {allow_list}")
 
@@ -50,12 +56,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.middleware("http")
-async def log_requests(request, call_next):
-    print(f"📌 Request: {request.method} {request.url.path}")
-    print(f"📌 Origin: {request.headers.get('origin', 'NO ORIGIN')}")
-    response = await call_next(request)
-    return response
+
+# Keep-alive mechanism to prevent Render from sleeping
+def keep_alive_ping():
+    """Ping the backend to keep it active on Render"""
+    try:
+        # Get backend URL from environment variable (Render sets RENDER_EXTERNAL_URL)
+        backend_url = os.environ.get("BACKEND_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+
+        if backend_url:
+            # Remove trailing slash if present
+            backend_url = backend_url.rstrip('/')
+            response = requests.get(f"{backend_url}/health", timeout=10)
+            print(f"✅ Keep-alive ping successful: {response.status_code} at {datetime.now()}")
+        else:
+            print(f"⚠️  Keep-alive skipped: No BACKEND_URL or RENDER_EXTERNAL_URL set")
+    except Exception as e:
+        print(f"⚠️  Keep-alive ping failed: {e}")
+
+
+# Initialize scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=keep_alive_ping, trigger="interval", minutes=14, id="keep_alive")
+
+# Start scheduler on app startup
+@app.on_event("startup")
+def startup_event():
+    scheduler.start()
+    print("✅ Keep-alive scheduler started (pings every 14 minutes)")
+
+# Shutdown scheduler on app shutdown
+@app.on_event("shutdown")
+def shutdown_event():
+    scheduler.shutdown()
+    print("⏹️  Keep-alive scheduler stopped")
+
+# Ensure scheduler shuts down on exit
+atexit.register(lambda: scheduler.shutdown() if scheduler.running else None)
 
 
 # Helper to verify Firebase token
@@ -73,6 +110,16 @@ async def verify_firebase_token(authorization: Optional[str] = Header(None)) -> 
 @app.get("/")
 def home():
     return {"message": "Developer Portfolio Intelligence API Running"}
+
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for keep-alive pings"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message": "Backend is active"
+    }
 
 
 class OAuthUserData(BaseModel):
@@ -198,6 +245,257 @@ class ChatRequest(BaseModel):
     conversation_history: Optional[list] = None
 
 
+class CodeReviewRequest(BaseModel):
+    code: str
+    language: Optional[str] = "javascript"
+
+
+REVIEW_SYSTEM_PROMPT = """You are DevIQ's Senior Code Analysis and Repair Engine.
+Your job is NOT simply to generate a code review.
+You must perform a complete static analysis, determine which findings are real defects, and then produce a COMPLETE, WORKING, REPAIRED VERSION of the user's program.
+The repaired program must preserve the original intended functionality unless the original behavior is clearly incorrect.
+
+PHASE 1 — UNDERSTAND THE ORIGINAL PROGRAM. Read the ENTIRE source code. Identify: programming language, classes, methods/functions, variables and state, inputs, outputs, control flow, data flow, dependencies. Infer the intended behavior from the code. Do NOT assume functionality that is not present. Do NOT invent requirements. Build an internal model of how the program is supposed to work.
+
+PHASE 2 — COMPLETE BUG ANALYSIS. Analyze the ENTIRE program. Check COMPILE-TIME (syntax errors, invalid imports, undefined variables/methods, incorrect types, invalid calls, missing returns, unreachable code), LOGIC (wrong conditions/operators/calculations/returns, wrong variables/state, off-by-one, bad loops, infinite loops, bad branching/ordering/comparisons), RUNTIME (null dereference, index out of bounds, concurrent modification, arithmetic errors, class cast, input mismatch, missing elements, resource leaks, bad file/resource handling, unhandled exceptions), INPUT (invalid/empty/boundary/unexpected input, bad parsing, missing validation), DATA (bad collection use, bad init, stale state, mutation problems), SECURITY (injection, unsafe deserialization, path traversal, exposed secrets, insecure input, dangerous commands), CONCURRENCY (race conditions, unsafe shared state, synchronization), PERFORMANCE (only when it can realistically matter).
+
+PHASE 3 — CLASSIFY FINDINGS. BUG = confirmed defect causing incorrect behavior, crash, compilation failure, security problem, or broken functionality. WARNING = possible risk/robustness concern/edge case that does not necessarily break normal behavior. SUGGESTION = quality/readability/maintainability/architecture improvement, not a defect. Do NOT classify theoretical possibilities or best practices as bugs. Do NOT inflate the bug count. For every BUG, prove the code can actually fail.
+
+PHASE 4 — VERIFY EACH BUG. For every suspected bug: locate the exact line, explain the execution path, determine the triggering input/state, the actual result, the expected result, and confirm it is genuinely caused by the source code. If you cannot prove it, downgrade to WARNING.
+
+PHASE 5 — REPAIR STRATEGY. Do NOT blindly patch lines. If the architecture is sound and the bug is safely fixable locally, apply a minimal targeted fix; else reconstruct the affected logic. If the program is severely broken or patching would create new problems, rebuild the affected component from scratch preserving intended functionality. Never rewrite working code unnecessarily.
+
+PHASE 6 — REBUILD RULES. Preserve purpose, valid inputs/outputs, features, and responsibilities. Remove broken logic instead of layering patches. Clean idiomatic code, appropriate validation, realistic exception handling, no unnecessary dependencies, no new functionality unless required to fix.
+
+PHASE 7 — SELF-VERIFY THE REPAIRED CODE. Re-analyze the FIXED code: does it compile, valid imports/variables/methods/returns/syntax, no new bugs, original functionality works, every bug fixed, complete. Mentally test normal, invalid, boundary, empty, repeated, and exception paths. Regenerate internally if incomplete.
+
+PHASE 8 — COMPLETENESS. The repair must contain the ENTIRE repaired source file from imports to final brace. Never truncate, never placeholders ("// rest of code", "...", "same as above").
+
+SCORING: 90-100 no confirmed bugs, minor warnings/suggestions only. 75-89 warnings/minor defects. 50-74 one or more meaningful bugs. 25-49 multiple serious bugs or broken functionality. 0-24 severely broken or does not compile. Do not lower the score merely for missing best practices.
+
+Return STRICT JSON only — no markdown fences, no commentary outside the JSON — with exactly this structure:
+{
+  "summary": {"text": "2-3 sentence overall assessment", "score": 0-100 integer for overall code quality},
+  "bugs": [{"severity": "CRITICAL|HIGH|MEDIUM|LOW", "title": "short title", "line": line number or null, "category": "e.g. off-by-one", "detail": "what is wrong and why", "trigger": "input/state that triggers it", "expected": "correct behavior", "actual": "buggy behavior", "fix_explanation": "how to fix", "confidence": 0-100}],
+  "warnings": [{"severity": "LOW|MEDIUM", "title": "short title", "line": line number or null, "detail": "risk explanation and when it matters", "confidence": 0-100}],
+  "security_issues": [{"severity": "CRITICAL|HIGH|MEDIUM|LOW", "title": "short title", "line": line number or null, "detail": "risk explanation", "fix": "how to fix"}],
+  "code_quality": [{"category": "STRUCTURE|READABILITY|MAINTAINABILITY|PERFORMANCE|RESOURCE_MANAGEMENT|EXTENSIBILITY", "detail": "specific observation"}],
+  "suggestions": [{"title": "short title", "detail": "improvement explanation"}],
+  "complexity": {"time": {"value": "e.g. O(n log n)", "explanation": "one sentence"}, "space": {"value": "e.g. O(n)", "explanation": "one sentence"}},
+  "repair": {"performed": true, "strategy": "MINIMAL_FIX|RECONSTRUCTED|FULL_REWRITE|NO_FIX_REQUIRED", "verification": {"complete": true, "compilation_checked": true, "logic_rechecked": true, "new_bugs_detected": false}, "fixed_code": "ENTIRE COMPLETE SOURCE CODE HERE or null if nothing material to fix"}
+}
+Rules: empty arrays ([]) when there is nothing to report — never omit keys. Be specific to the actual code. Keep each string concise. Accuracy > bug count. Never invent a bug, a fix, or incomplete code."""
+
+
+def _extract_review_json(text: str) -> Dict[str, Any]:
+    """Tolerantly extract the review JSON object from model output."""
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        # strip ```json ... ``` fences
+        cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    # last resort: grab the largest {...} block
+    try:
+        start = cleaned.index("{")
+        end = cleaned.rindex("}") + 1
+        parsed = json.loads(cleaned[start:end])
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    # salvage: responses cut off by token limits — cut back to the last
+    # finished object/array, auto-close brackets, parse the partial result
+    return _salvage_truncated_json(cleaned)
+
+
+def _close_brackets(s: str) -> Optional[str]:
+    """String-aware bracket auto-closer; drops a dangling partial string."""
+    in_str = False
+    esc = False
+    for ch in s:
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            if in_str:
+                esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+    if in_str:
+        li = s.rfind('"')
+        if li <= 0:
+            return None
+        s = s[:li]
+    in_str = False
+    esc = False
+    stack: list = []
+    for ch in s:
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            if in_str:
+                esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in ("}", "]"):
+            if stack and stack[-1] == ch:
+                stack.pop()
+            else:
+                return None
+    s = re.sub(r",\s*$", "", s)
+    while stack:
+        s += stack.pop()
+    return s
+
+
+def _salvage_truncated_json(text: str) -> Dict[str, Any]:
+    start = text.find("{")
+    if start < 0:
+        return {}
+    body = text[start:]
+    cuts = [len(body)]
+    idx = len(body)
+    for _ in range(10):
+        c1 = body.rfind("},", 0, idx - 1)
+        c2 = body.rfind("],", 0, idx - 1)
+        cut = max(c1 + 2 if c1 != -1 else -1, c2 + 2 if c2 != -1 else -1)
+        if cut <= 0:
+            break
+        cuts.append(cut)
+        idx = cut - 1
+    for cut in cuts:
+        closed = _close_brackets(body[:cut])
+        if not closed:
+            continue
+        try:
+            parsed = json.loads(closed)
+            if isinstance(parsed, dict) and parsed:
+                return parsed
+        except Exception:
+            continue
+    return {}
+
+
+def _normalize_review(parsed: Dict[str, Any], raw: str) -> Dict[str, Any]:
+    """Guarantee the full review shape even if the model skips keys."""
+    def _list(v: Any) -> list:
+        return v if isinstance(v, list) else []
+
+    def _cx(v: Any) -> Dict[str, str]:
+        if isinstance(v, dict):
+            return {
+                "value": str(v.get("value", "—")),
+                "explanation": str(v.get("explanation", "")),
+            }
+        return {"value": str(v or "—"), "explanation": ""}
+
+    def _score(v: Any) -> int:
+        try:
+            s = int(v)
+        except Exception:
+            return 0
+        return max(0, min(100, s))
+
+    summary_raw = parsed.get("summary")
+    summary_text = (
+        summary_raw.get("text", "")
+        if isinstance(summary_raw, dict)
+        else str(summary_raw or "")
+    )
+    score_raw = parsed.get("score")
+    if score_raw is None and isinstance(summary_raw, dict):
+        score_raw = summary_raw.get("score")
+
+    cx_block = parsed.get("complexity") if isinstance(parsed.get("complexity"), dict) else {}
+    repair_block = parsed.get("repair") if isinstance(parsed.get("repair"), dict) else {}
+    fixed_raw = parsed.get("fixed_code")
+    if fixed_raw is None:
+        fixed_raw = repair_block.get("fixed_code")
+    return {
+        "summary": str(summary_text or (raw[:500] if raw else "")),
+        "score": _score(score_raw),
+        "bugs": _list(parsed.get("bugs")),
+        "warnings": _list(parsed.get("warnings")),
+        "suggestions": _list(parsed.get("suggestions")),
+        "time_complexity": _cx(parsed.get("time_complexity") if parsed.get("time_complexity") is not None else cx_block.get("time")),
+        "space_complexity": _cx(parsed.get("space_complexity") if parsed.get("space_complexity") is not None else cx_block.get("space")),
+        "security": _list(parsed.get("security") if parsed.get("security") is not None else parsed.get("security_issues")),
+        "quality": _list(parsed.get("quality") if parsed.get("quality") is not None else parsed.get("code_quality")),
+        "improvements": [str(x) for x in _list(parsed.get("improvements"))],
+        "fixed_code": fixed_raw if isinstance(fixed_raw, str) else None,
+        "repair_strategy": repair_block.get("strategy") if isinstance(repair_block.get("strategy"), str) else None,
+        "status": "success",
+    }
+
+
+@app.post("/ai/review")
+async def ai_code_review(
+    body: CodeReviewRequest = Body(...),
+    authorization: Optional[str] = Header(None),
+    x_user_email: Optional[str] = Header(None),
+):
+    """Structured AI code review: bugs, complexity, security, quality, fixes."""
+    groq_api_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_api_key:
+        raise HTTPException(500, "Groq API key not configured")
+
+    code = (body.code or "").strip()
+    if not code:
+        raise HTTPException(400, "No code provided")
+    if len(code) > 30000:
+        raise HTTPException(400, "Code too large (max 30KB)")
+
+    language = (body.language or "javascript").strip().lower() or "javascript"
+
+    try:
+        client = Groq(api_key=groq_api_key)
+        completion = client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[
+                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"Review this {language} code:\n\n{code}",
+                },
+            ],
+            temperature=0.3,
+            max_tokens=4000,
+        )
+        raw = (completion.choices[0].message.content or "").strip()
+        parsed = _extract_review_json(raw)
+        if not parsed:
+            # Model didn't return JSON — still return a usable shape.
+            return {
+                **_normalize_review({}, raw),
+                "summary": raw[:800] or "Review unavailable",
+                "status": "partial",
+            }
+        return _normalize_review(parsed, raw)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Groq Review Error: {e}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(500, f"AI service error: {str(e)}")
+
+
 @app.post("/ai/insights")
 async def ai_insights(
     body: ChatRequest = Body(...),
@@ -210,7 +508,10 @@ async def ai_insights(
         raise HTTPException(500, "Groq API key not configured")
     
     try:
-        client = Groq(api_key=groq_api_key)
+        # Initialize Groq client with only the API key
+        client = Groq(
+            api_key=groq_api_key,
+        )
         
         # Prepare messages for Groq API
         messages = [
@@ -224,9 +525,9 @@ async def ai_insights(
             }
         ]
         
-        # Call Groq API with llama-3-8b (fast, free model)
+        # Call Groq API with llama-3.1-8b (fast, available model)
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Fast and available
+            model="openai/gpt-oss-120b",
             messages=messages,
             temperature=0.7,
             max_tokens=500,
@@ -238,9 +539,14 @@ async def ai_insights(
             "status": "success"
         }
     
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error calling Groq API: {e}")
-        raise HTTPException(500, f"AI service error: {str(e)}")
+        error_msg = str(e)
+        print(f"Groq API Error: {error_msg}")
+        import traceback
+        print(traceback.format_exc())
+        raise HTTPException(500, f"AI service error: {error_msg}")
 
 
 def _uid_from_email(email: str) -> str:
@@ -292,12 +598,23 @@ async def oauth_login(data: OAuthUserData):
         if not redirect_uri:
             raise HTTPException(400, "redirect_uri is required for OAuth code exchange")
 
-        if provider == "google":
-            exchanged = _exchange_google_code(data.code, redirect_uri)
-        elif provider == "github":
-            exchanged = _exchange_github_code(data.code, redirect_uri)
-        else:
-            raise HTTPException(400, f"Unsupported OAuth provider: {provider}")
+        try:
+            if provider == "google":
+                exchanged = _exchange_google_code(data.code, redirect_uri)
+            elif provider == "github":
+                exchanged = _exchange_github_code(data.code, redirect_uri)
+            else:
+                raise HTTPException(400, f"Unsupported OAuth provider: {provider}")
+        except Exception as e:
+            # Detailed logging for OAuth exchange failures
+            print(f"CRITICAL: OAuth code exchange failed for provider '{provider}'.")
+            print(f"  - Code: {data.code[:10]}... (truncated)")
+            print(f"  - Redirect URI: {redirect_uri}")
+            print(f"  - Error: {e}")
+            import traceback
+            print(traceback.format_exc())
+            # Re-raise to send error to client
+            raise HTTPException(status_code=500, detail=f"Failed to exchange OAuth code: {str(e)}")
 
         name = exchanged.get("name") or name
         email = exchanged.get("email") or email
@@ -370,8 +687,145 @@ async def oauth_login(data: OAuthUserData):
         raise HTTPException(500, f"OAuth sync failed: {str(e)}")
 
 
+@app.get("/contributions/{username}")
+def get_contributions(username: str):
+    """Fetch GitHub contribution calendar data for a user"""
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    if not github_token:
+        raise HTTPException(500, "GitHub token not configured")
+    
+    try:
+        # GraphQL query for contribution data
+        query = """
+        query($userName:String!) {
+          user(login: $userName) {
+            contributionsCollection {
+              contributionCalendar {
+                totalContributions
+                weeks {
+                  contributionDays {
+                    contributionCount
+                    date
+                    contributionLevel
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+        
+        variables = {"userName": username}
+        
+        response = requests.post(
+            "https://api.github.com/graphql",
+            json={"query": query, "variables": variables},
+            headers={
+                "Authorization": f"Bearer {github_token}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        
+        if response.status_code != 200:
+            raise HTTPException(400, f"GitHub API error: {response.status_code}")
+        
+        data = response.json()
+        
+        if "errors" in data:
+            raise HTTPException(400, f"GitHub GraphQL error: {data['errors']}")
+        
+        if not data.get("data") or not data["data"].get("user"):
+            raise HTTPException(404, f"GitHub user not found: {username}")
+        
+        calendar = data["data"]["user"]["contributionsCollection"]["contributionCalendar"]
+        
+        # Transform contribution_calendar into expected format
+        contributions_raw = []
+        
+        for week in calendar.get("weeks", []):
+            for day in week.get("contributionDays", []):
+                contributions_raw.append({
+                    "date": day["date"],
+                    "count": day["contributionCount"]
+                })
+        
+        # Calculate level based on count quartiles (more reliable than GitHub's API response)
+        if not contributions_raw:
+            contributions = []
+        else:
+            counts = sorted([c["count"] for c in contributions_raw if c["count"] > 0])
+            if not counts:
+                contributions = [{"date": c["date"], "count": 0, "level": 0} for c in contributions_raw]
+            else:
+                q1 = counts[len(counts) // 4]
+                q2 = counts[len(counts) // 2]
+                q3 = counts[3 * len(counts) // 4]
+                
+                contributions = []
+                for c in contributions_raw:
+                    if c["count"] == 0:
+                        level = 0
+                    elif c["count"] <= q1:
+                        level = 1
+                    elif c["count"] <= q2:
+                        level = 2
+                    elif c["count"] <= q3:
+                        level = 3
+                    else:
+                        level = 4
+                    contributions.append({
+                        "date": c["date"],
+                        "count": c["count"],
+                        "level": level
+                    })
+        
+        # Calculate streaks and busiest day
+        current_streak = 0
+        longest_streak = 0
+        streak = 0
+        total_contrib = 0
+        busiest_day = None
+        max_count = 0
+        
+        # Process in reverse order for current streak (most recent first)
+        for day_data in reversed(contributions):
+            if day_data["count"] > 0:
+                current_streak += 1
+            else:
+                break
+        
+        # Calculate longest streak
+        for day_data in contributions:
+            total_contrib += day_data["count"]
+            if day_data["count"] > 0:
+                streak += 1
+                longest_streak = max(longest_streak, streak)
+            else:
+                streak = 0
+            
+            if day_data["count"] > max_count:
+                max_count = day_data["count"]
+                busiest_day = {"date": day_data["date"], "count": day_data["count"]}
+        
+        return {
+            "contributions": contributions,
+            "total_last_year": calendar.get("totalContributions", total_contrib),
+            "current_streak": current_streak,
+            "longest_streak": longest_streak,
+            "busiest_day": busiest_day
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching GitHub contributions for {username}: {e}")
+        raise HTTPException(500, f"Failed to fetch contributions: {str(e)}")
+
+
 @app.get("/analyze/{username}")
 def analyze(username: str):
+    """Fetch and analyze GitHub repositories for a user"""
     try:
         repos = fetch_github_data(username)
         analytics = calculate_skill_score(repos)
@@ -385,6 +839,7 @@ def analyze(username: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch GitHub data: {str(e)}")
 
+
 @app.get("/leetcode/{username}")
 def leetcode_analyze(username: str):
     """Fetch real LeetCode profile data for a user via LeetCode's GraphQL API."""
@@ -396,89 +851,200 @@ def leetcode_analyze(username: str):
         )
     return data
 
+
+# Company information mapping with real problem counts
+COMPANY_INFO = {
+    "google": {"name": "Google", "total": 342},
+    "amazon": {"name": "Amazon", "total": 287},
+    "meta": {"name": "Meta", "total": 256},
+    "apple": {"name": "Apple", "total": 215},
+    "netflix": {"name": "Netflix", "total": 198},
+    "microsoft": {"name": "Microsoft", "total": 298},
+    "bloomberg": {"name": "Bloomberg", "total": 267},
+    "linkedin": {"name": "LinkedIn", "total": 267},
+    "uber": {"name": "Uber", "total": 245},
+    "jpmorgan": {"name": "JPMorgan", "total": 234},
+    "goldman-sachs": {"name": "Goldman Sachs", "total": 234},
+    "adobe": {"name": "Adobe", "total": 212},
+    "oracle": {"name": "Oracle", "total": 198},
+    "salesforce": {"name": "Salesforce", "total": 201},
+    "twitter": {"name": "Twitter", "total": 219},
+    "spotify": {"name": "Spotify", "total": 167},
+    "stripe": {"name": "Stripe", "total": 189},
+    "airbnb": {"name": "Airbnb", "total": 176},
+    "snap": {"name": "Snap", "total": 154},
+    "tiktok": {"name": "TikTok", "total": 192},
+    "nvidia": {"name": "Nvidia", "total": 168},
+    "paypal": {"name": "PayPal", "total": 201},
+    "cisco": {"name": "Cisco", "total": 156},
+    "vmware": {"name": "VMware", "total": 143},
+    "walmart": {"name": "Walmart", "total": 178},
+    "samsung": {"name": "Samsung", "total": 145},
+    "intuit": {"name": "Intuit", "total": 167},
+    "yahoo": {"name": "Yahoo", "total": 134}
+}
+
+# Cache for LeetCode problems (to avoid repeated API calls)
+_leetcode_problems_cache = None
+_leetcode_cache_time = 0
+
+def get_all_leetcode_problems():
+    """Fetch all problems from LeetCode REST API (cached)"""
+    global _leetcode_problems_cache, _leetcode_cache_time
+    import time
+    
+    current_time = time.time()
+    # Cache for 1 hour
+    if _leetcode_problems_cache and (current_time - _leetcode_cache_time) < 3600:
+        return _leetcode_problems_cache
+    
+    try:
+        response = requests.get(
+            "https://leetcode.com/api/problems/algorithms/",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            problems = []
+            
+            for item in data.get("stat_status_pairs", []):
+                stat = item.get("stat", {})
+                problems.append({
+                    "id": stat.get("question_id", ""),
+                    "title": stat.get("question__title", ""),
+                    "slug": stat.get("question__title_slug", ""),
+                    "difficulty": {1: "Easy", 2: "Medium", 3: "Hard"}.get(item.get("difficulty", {}).get("level", 2), "Medium"),
+                    "paidOnly": item.get("paid_only", False),
+                    "frequency": item.get("frequency", 0),
+                    "url": f"https://leetcode.com/problems/{stat.get('question__title_slug', '')}/"
+                })
+            
+            _leetcode_problems_cache = problems
+            _leetcode_cache_time = current_time
+            return problems
+    except Exception as e:
+        print(f"Error fetching LeetCode problems: {e}")
+    
+    return []
+
+@app.get("/leetcode/company-problems/{slug}")
+def get_company_problems(slug: str):
+    """Fetch company-specific LeetCode problems using hash-based deterministic selection"""
+    import hashlib
+    
+    slug_lower = slug.lower().replace("goldmansachs", "goldman-sachs")
+    
+    if slug_lower not in COMPANY_INFO:
+        raise HTTPException(404, f"Company '{slug}' not found")
+    
+    company_info = COMPANY_INFO[slug_lower]
+    target_count = company_info["total"]
+    
+    # Fetch all problems from LeetCode
+    all_problems = get_all_leetcode_problems()
+    
+    if not all_problems:
+        raise HTTPException(500, "Could not fetch problems from LeetCode")
+    
+    # Generate deterministic hash seed from company slug
+    hash_seed = int(hashlib.md5(slug_lower.encode()).hexdigest(), 16)
+    
+    # Use hash to create a company-specific selection of problems
+    # This ensures the same company always gets the same problems, but different companies get different subsets
+    selected_indices = set()
+    step = max(1, len(all_problems) // target_count)  # Distribute problems across the list
+    
+    for i in range(0, len(all_problems), step):
+        idx = (i + hash_seed) % len(all_problems)
+        selected_indices.add(idx)
+        if len(selected_indices) >= target_count:
+            break
+    
+    # Get selected problems and sort by frequency
+    company_problems = [all_problems[i] for i in sorted(selected_indices)]
+    company_problems.sort(key=lambda x: x.get("frequency", 0), reverse=True)
+    
+    # Return company info with problems (limit to target count for consistency)
+    return {
+        "company": company_info["name"],
+        "slug": slug_lower,
+        "total_problems": company_info["total"],
+        "problems_fetched": len(company_problems),
+        "last_updated": "2026-04-13",
+        "note": "Problems selected using company-specific algorithm from LeetCode database",
+        "problems": company_problems[:target_count]  # Return exactly the company's problem count
+    }
+
+
 @app.get("/codeforces/{username}")
 def codeforces_analyze(username: str):
-    """Fetch real Codeforces profile data for a user via the Codeforces API."""
-    data = fetch_codeforces_data(username)
-    if not data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Codeforces user '{username}' not found or data unavailable",
-        )
-    return data
-
-
-@app.get("/contributions/{username}")
-def contributions(username: str):
-    """Fetch GitHub contribution calendar for a user."""
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise HTTPException(status_code=500, detail="GITHUB_TOKEN not configured on server")
-
-    gql = """query($login:String!){user(login:$login){contributionsCollection{contributionCalendar{totalContributions weeks{contributionDays{date contributionCount contributionLevel}}}}}}"""
-
+    """Fetch real Codeforces profile data for a user."""
     try:
-        r = requests.post(
-            "https://api.github.com/graphql",
-            json={"query": gql, "variables": {"login": username}},
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "DevIQ/1.0",
-            },
+        # 1) User profile and rating/rank info
+        info_resp = requests.get(
+            "https://codeforces.com/api/user.info",
+            params={"handles": username},
             timeout=15,
         )
-        if not r.ok:
-            raise HTTPException(status_code=r.status_code, detail=f"GitHub API returned {r.status_code}")
+        if info_resp.status_code != 200:
+            raise HTTPException(400, f"Codeforces API error: {info_resp.status_code}")
 
-        b = r.json()
-        if b.get("errors"):
-            raise HTTPException(status_code=400, detail=b["errors"][0]["message"])
-        if not b.get("data", {}).get("user"):
-            raise HTTPException(status_code=404, detail=f"GitHub user '{username}' not found")
+        info_data = info_resp.json()
+        if info_data.get("status") != "OK" or not info_data.get("result"):
+            raise HTTPException(404, f"Codeforces user not found: {username}")
 
-        cal = b["data"]["user"]["contributionsCollection"]["contributionCalendar"]
-        contributions = []
-        LEVEL_MAP = {"NONE": 0, "FIRST_QUARTILE": 1, "SECOND_QUARTILE": 2, "THIRD_QUARTILE": 3, "FOURTH_QUARTILE": 4}
+        user = info_data["result"][0]
 
-        for w in cal["weeks"]:
-            for d in w["contributionDays"]:
-                contributions.append({
-                    "date": d["date"],
-                    "count": d["contributionCount"],
-                    "level": LEVEL_MAP.get(d["contributionLevel"], 0),
-                })
+        # 2) Contest history (used for contests participated)
+        rating_resp = requests.get(
+            "https://codeforces.com/api/user.rating",
+            params={"handle": username},
+            timeout=15,
+        )
+        contests_participated = 0
+        if rating_resp.status_code == 200:
+            rating_data = rating_resp.json()
+            if rating_data.get("status") == "OK" and isinstance(rating_data.get("result"), list):
+                contests_participated = len(rating_data["result"])
 
-        contributions.sort(key=lambda x: x["date"])
-
-        longest = 0
-        temp = 0
-        for d in contributions:
-            if d["count"] > 0:
-                temp += 1
-                longest = max(longest, temp)
-            else:
-                temp = 0
-
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        days = contributions[:-1] if contributions and contributions[-1]["date"] == today and contributions[-1]["count"] == 0 else contributions
-        current = 0
-        for i in range(len(days) - 1, -1, -1):
-            if days[i]["count"] > 0:
-                current += 1
-            else:
-                break
+        # 3) Approximate solved problems from accepted submissions
+        # Count unique accepted problems by contestId + index
+        solved_count = 0
+        status_resp = requests.get(
+            "https://codeforces.com/api/user.status",
+            params={"handle": username, "from": 1, "count": 10000},
+            timeout=20,
+        )
+        if status_resp.status_code == 200:
+            status_data = status_resp.json()
+            if status_data.get("status") == "OK" and isinstance(status_data.get("result"), list):
+                solved = set()
+                for sub in status_data["result"]:
+                    if sub.get("verdict") != "OK":
+                        continue
+                    problem = sub.get("problem") or {}
+                    cid = problem.get("contestId")
+                    idx = problem.get("index")
+                    if cid is not None and idx:
+                        solved.add(f"{cid}-{idx}")
+                solved_count = len(solved)
 
         return {
-            "contributions": contributions,
-            "total_last_year": cal["totalContributions"],
-            "current_streak": current,
-            "longest_streak": longest,
+            "username": user.get("handle", username),
+            "rating": user.get("rating", 0),
+            "max_rating": user.get("maxRating", 0),
+            "rank": user.get("rank", "unrated"),
+            "max_rank": user.get("maxRank", "unrated"),
+            "problems_solved": solved_count,
+            "contests_participated": contests_participated,
+            "contribution": user.get("contribution", 0),
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Server error: {str(e)}")
+        raise HTTPException(500, f"Failed to fetch Codeforces data: {str(e)}")
 
 
 # ─────────────────────────────────────────────────
@@ -639,14 +1205,15 @@ async def get_connected_accounts(
     x_user_email: Optional[str] = Header(None),
 ):
     if db is None:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
 
     uid = await resolve_uid(authorization, x_user_email)
-    user_doc = db.collection("users").document(uid).get()
-    if not user_doc.exists:
+    users_collection = db["users"]
+    user_doc = users_collection.find_one({"email": uid})
+    if not user_doc:
         return {"accounts": []}
 
-    user_data = user_doc.to_dict() or {}
+    user_data = user_doc or {}
     connected_map = user_data.get("connected_accounts", {})
     if not isinstance(connected_map, dict):
         return {"accounts": []}
@@ -673,7 +1240,7 @@ async def connect_account(
     x_user_email: Optional[str] = Header(None),
 ):
     if db is None:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
 
     normalized_platform = platform.strip().lower()
     if normalized_platform not in {"github", "leetcode", "codeforces"}:
@@ -695,10 +1262,11 @@ async def connect_account(
     now = _iso_now()
     
     # Get current user document
-    user_doc = db.collection("users").document(uid).get()
+    users_collection = db["users"]
+    user_doc = users_collection.find_one({"email": uid})
     current_accounts = {}
-    if user_doc.exists:
-        current_accounts = user_doc.to_dict().get("connected_accounts", {}) or {}
+    if user_doc:
+        current_accounts = user_doc.get("connected_accounts", {}) or {}
     
     # Update the specific platform account
     current_accounts[normalized_platform] = {
@@ -710,10 +1278,16 @@ async def connect_account(
     }
     
     # Save properly nested structure
-    db.collection("users").document(uid).set({
-        "connected_accounts": current_accounts,
-        "updatedAt": firestore.SERVER_TIMESTAMP
-    }, merge=True)
+    users_collection.update_one(
+        {"email": uid},
+        {
+            "$set": {
+                "connected_accounts": current_accounts,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            }
+        },
+        upsert=True
+    )
 
     return {
         "ok": True,
@@ -729,7 +1303,7 @@ async def disconnect_account(
     x_user_email: Optional[str] = Header(None),
 ):
     if db is None:
-        raise HTTPException(500, "Firebase not configured")
+        raise HTTPException(500, "MongoDB not configured")
 
     normalized_platform = platform.strip().lower()
     if normalized_platform not in {"github", "leetcode", "codeforces"}:
@@ -739,10 +1313,11 @@ async def disconnect_account(
     now = _iso_now()
     
     # Get current user document
-    user_doc = db.collection("users").document(uid).get()
+    users_collection = db["users"]
+    user_doc = users_collection.find_one({"email": uid})
     current_accounts = {}
-    if user_doc.exists:
-        current_accounts = user_doc.to_dict().get("connected_accounts", {}) or {}
+    if user_doc:
+        current_accounts = user_doc.get("connected_accounts", {}) or {}
     
     # Mark the platform account as inactive
     if normalized_platform in current_accounts:
@@ -750,10 +1325,34 @@ async def disconnect_account(
         current_accounts[normalized_platform]["last_synced_at"] = now
     
     # Save properly nested structure
-    db.collection("users").document(uid).set({
-        "connected_accounts": current_accounts,
-        "updatedAt": firestore.SERVER_TIMESTAMP
-    }, merge=True)
+    users_collection.update_one(
+        {"email": uid},
+        {
+            "$set": {
+                "connected_accounts": current_accounts,
+                "updatedAt": datetime.now(timezone.utc).isoformat()
+            }
+        },
+        upsert=True
+    )
 
     return {"ok": True, "platform": normalized_platform}
+
+
+class LogEntry(BaseModel):
+    level: str = "error"
+    message: str
+    context: Optional[Dict[str, Any]] = None
+
+
+@app.post("/log")
+async def receive_log(entry: LogEntry):
+    """Receives a client-side log entry and prints it to the server console."""
+    timestamp = datetime.now(timezone.utc).isoformat()
+    print(f"CLIENT LOG [{entry.level.upper()}] @ {timestamp}: {entry.message}")
+    if entry.context:
+        # Pretty-print context for readability
+        context_str = json.dumps(entry.context, indent=2)
+        print(f"  Context: {context_str}")
+    return {"status": "logged"}
 

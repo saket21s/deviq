@@ -206,7 +206,8 @@ async function executeOnGodbolt(
 /** TypeScript: strip types with the TS compiler, then run the JS in a
  *  locked-down Node vm (no require/process/fs access) with a timeout. */
 async function executeTypeScript(
-  code: string
+  code: string,
+  stdin: string
 ): Promise<{ stdout: string; stderr: string; exit_code: number; time_ms: number }> {
   const t0 = Date.now();
   let js: string;
@@ -246,7 +247,19 @@ async function executeTypeScript(
     error: (...args: unknown[]) => void logs.push(`✖ ${fmt(args)}`),
   };
   // No require/module/process/fs in scope — user code gets console only.
-  const sandbox = { console: sandboxConsole };
+  // prompt(msg?) reads one stdin line per call, like a terminal.
+  const inputLines = stdin.split("\n");
+  const stdinEmpty = inputLines.length === 1 && inputLines[0] === "";
+  let lineIdx = 0;
+  const takeLine = (): string => {
+    if (stdinEmpty || lineIdx >= inputLines.length) return "";
+    return inputLines[lineIdx++];
+  };
+  const sandboxPrompt = (msg?: unknown): string => {
+    if (msg !== undefined) logs.push(String(msg));
+    return takeLine();
+  };
+  const sandbox = { console: sandboxConsole, prompt: sandboxPrompt };
   try {
     const result = vm.runInNewContext(
       `(async () => {\n${js}\n})()`,
@@ -316,7 +329,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (languageKey === "typescript") {
-    const res = await executeTypeScript(code);
+    const res = await executeTypeScript(code, stdin);
     return NextResponse.json({
       language: languageKey,
       runtime: "typescript (transpiled, sandboxed)",
