@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const BACKEND = process.env.NEXT_PUBLIC_API_BASE_URL || "https://deviq-backend-x6a9.onrender.com";
+const RAW_BACKEND = process.env.NEXT_PUBLIC_API_BASE_URL || "https://deviq-backend-x6a9.onrender.com";
+const BACKEND = RAW_BACKEND.includes("developer-portfolio-backend-bu76")
+  ? "https://deviq-backend-x6a9.onrender.com"
+  : RAW_BACKEND;
 
 const METHODS_WITH_BODY = ["POST", "PUT", "PATCH"];
 

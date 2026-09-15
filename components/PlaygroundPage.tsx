@@ -183,11 +183,14 @@ const LANGUAGES: LanguageDef[] = [
  *  JavaScript stays fully local; the rest fall back to batch when offline. */
 const LIVE_LANGS = ["javascript", "python", "typescript", "java", "c", "cpp", "go"];
 
-/** Direct backend origin — fallback when the Next.js proxy route is
- *  unavailable (e.g. static GitHub Pages export). The proxy at
- *  /api/proxy/* is preferred when present (avoids CORS). */
+/** Direct backend origin — prefer the new Render service.
+ *  If the env still points at the old bu76 host (Vercel env cache), force
+ *  the new host so Java/Go live sessions work. */
+const RAW_BACKEND_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "https://deviq-backend-x6a9.onrender.com";
 const BACKEND_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE_URL || "https://deviq-backend-x6a9.onrender.com"
+  RAW_BACKEND_BASE.includes("developer-portfolio-backend-bu76")
+    ? "https://deviq-backend-x6a9.onrender.com"
+    : RAW_BACKEND_BASE
 ).replace(/\/$/, "");
 
 /** How each language reads a line from stdin (shown in the terminal hint). */
@@ -703,11 +706,12 @@ export default function PlaygroundPage({
           clearTimeout(t);
         }
       };
+      // Try direct first — proxy on Vercel/GH Pages can return 200 HTML for /api/proxy
       try {
-        return await fetchLangs("/api/proxy/exec/languages");
+        return await fetchLangs(`${BACKEND_BASE}/exec/languages`);
       } catch {
         try {
-          return await fetchLangs(`${BACKEND_BASE}/exec/languages`);
+          return await fetchLangs("/api/proxy/exec/languages");
         } catch {
           const info = { ok: false, langs: [] as string[], at: Date.now() };
           setRunner(info);
@@ -751,14 +755,21 @@ export default function PlaygroundPage({
         clearTimeout(t);
       }
     };
+    // Direct first — Vercel proxy can return HTML 200 and look like success
+    try {
+      return await doFetch(BACKEND_BASE);
+    } catch {
+      /* fallback to proxy */
+    }
     try {
       const viaProxy = await doFetch("/api/proxy");
       if (viaProxy.status !== 404 && (viaProxy as { ct: string }).ct?.includes("application/json")) return viaProxy;
       if (viaProxy.status !== 404 && viaProxy.ok && Object.keys(viaProxy.data).length === 0) throw new Error("empty proxy");
+      return viaProxy;
     } catch {
-      /* try direct */
+      // both failed — re-throw direct error by retrying direct
+      return doFetch(BACKEND_BASE);
     }
-    return doFetch(BACKEND_BASE);
   }, []);
 
   /** Append a streamed chunk, splitting off complete lines. Prompts without
@@ -913,19 +924,17 @@ export default function PlaygroundPage({
             const resp = await fetch(url, {
               ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
             });
+            const ct = resp.headers.get("content-type") || "";
+            if (!ct.includes("application/json") && resp.ok) throw new Error("poll html");
             const body = await resp.json().catch(() => ({}));
             if (!resp.ok) throw new Error(body?.error || `poll failed (${resp.status})`);
             return body;
           };
+          // Direct first — proxy can return HTML 200 and hide stdout
           try {
+            r = await tryPoll(BACKEND_BASE);
+          } catch {
             r = await tryPoll("/api/proxy");
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            if (msg.includes("404") || msg.includes("Failed to fetch")) {
-              r = await tryPoll(BACKEND_BASE);
-            } else {
-              throw e;
-            }
           }
         } catch (e) {
           if (sessionRef.current?.id !== sid) return;
@@ -1151,9 +1160,10 @@ export default function PlaygroundPage({
           return null;
         }
       };
-      const viaProxy = await tryBackend("/api/proxy", "/execute");
-      if (viaProxy) return viaProxy;
-      return tryBackend(BACKEND_BASE, "/execute");
+      // Direct first — proxy can be stale HTML 200
+      const viaDirect = await tryBackend(BACKEND_BASE, "/execute");
+      if (viaDirect) return viaDirect;
+      return tryBackend("/api/proxy", "/execute");
     };
 
     // Browser engines consume stdin progressively; batch engines get one
