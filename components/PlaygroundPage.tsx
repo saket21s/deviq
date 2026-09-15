@@ -542,6 +542,7 @@ export default function PlaygroundPage({
   const [pendingOut, setPendingOut] = useState("");
   const [pendingErr, setPendingErr] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingRef = useRef(false);
 
   const pushT = useCallback((kind: TLineKind, text: string) => {
     const id = ++tId.current;
@@ -904,6 +905,8 @@ export default function PlaygroundPage({
         pushT("sys", `${boxLines.length} stdin line(s) piped from INPUT box — type below to interact live.`);
       const pollOnce = async () => {
         if (sessionRef.current?.id !== sid) return;
+        if (pollingRef.current) return;
+        pollingRef.current = true;
         let r: {
           state?: string;
           stdout?: string;
@@ -941,12 +944,24 @@ export default function PlaygroundPage({
           pushT("err", e instanceof Error ? e.message : "Lost connection to the runner.");
           endSession(sid, "error", startedAt, {});
           return;
+        } finally {
+          pollingRef.current = false;
         }
         if (sessionRef.current?.id !== sid) return;
         if (typeof r.so === "number" && typeof r.se === "number")
           offRef.current = { so: r.so, se: r.se };
-        ingest("out", r.stdout ?? "");
-        ingest("err", r.stderr ?? "");
+        // Guard against duplicate chunks from stale offsets (concurrent poll protection)
+        if (r.stdout && r.stdout.length > 0) {
+          // If chunk is already contained in pending, skip (duplicate poll)
+          if (remOutRef.current && r.stdout.startsWith(remOutRef.current) && r.stdout.length === remOutRef.current.length) {
+            // duplicate — skip ingest
+          } else {
+            ingest("out", r.stdout);
+          }
+        } else if (r.stdout) {
+          ingest("out", r.stdout);
+        }
+        if (r.stderr) ingest("err", r.stderr);
         if (r.state && r.state !== "running") {
           const failed =
             r.state === "timeout" ||
