@@ -685,11 +685,16 @@ export default function PlaygroundPage({
         try {
           const r = await fetch(url, { signal: ctrl.signal });
           if (!r.ok) throw new Error(`runner check (${r.status})`);
+          const ct = r.headers.get("content-type") || "";
+          if (!ct.includes("application/json")) throw new Error("not json");
           const d = (await r.json().catch(() => ({}))) as {
             supported?: Record<string, boolean>;
           };
-          const supported = d?.supported ?? {};
+          if (!d.supported || typeof d.supported !== "object") throw new Error("bad payload");
+          const supported = d.supported;
           const langs = Object.keys(supported).filter((k) => supported[k]);
+          // Empty langs with ok:true is ambiguous (proxy returned html 200) — treat as failure so direct is tried
+          if (langs.length === 0 && Object.keys(supported).length === 0) throw new Error("empty supported");
           const info = { ok: true, langs, at: Date.now() };
           setRunner(info);
           runnerRef.current = info;
@@ -737,16 +742,19 @@ export default function PlaygroundPage({
           signal: ctrl.signal,
           ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
         });
+        const ct = r.headers.get("content-type") || "";
+        // GH Pages / Vercel catch-all can return HTML 200 for /api/proxy — treat as missing route
+        if (!ct.includes("application/json") && r.ok) throw new Error("proxy returned html");
         const data = await r.json().catch(() => ({}));
-        return { ok: r.ok, status: r.status, data };
+        return { ok: r.ok, status: r.status, data, ct };
       } finally {
         clearTimeout(t);
       }
     };
     try {
       const viaProxy = await doFetch("/api/proxy");
-      // 404 means static export with no proxy route — fall back to direct
-      if (viaProxy.status !== 404) return viaProxy;
+      if (viaProxy.status !== 404 && (viaProxy as { ct: string }).ct?.includes("application/json")) return viaProxy;
+      if (viaProxy.status !== 404 && viaProxy.ok && Object.keys(viaProxy.data).length === 0) throw new Error("empty proxy");
     } catch {
       /* try direct */
     }
