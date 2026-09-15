@@ -183,6 +183,13 @@ const LANGUAGES: LanguageDef[] = [
  *  JavaScript stays fully local; the rest fall back to batch when offline. */
 const LIVE_LANGS = ["javascript", "python", "typescript", "java", "c", "cpp", "go"];
 
+/** Direct backend origin — fallback when the Next.js proxy route is
+ *  unavailable (e.g. static GitHub Pages export). The proxy at
+ *  /api/proxy/* is preferred when present (avoids CORS). */
+const BACKEND_BASE = (
+  process.env.NEXT_PUBLIC_API_BASE_URL || "https://developer-portfolio-backend-bu76.onrender.com"
+).replace(/\/$/, "");
+
 /** How each language reads a line from stdin (shown in the terminal hint). */
 const INPUT_HINT: Record<string, string> = {
   javascript: "prompt()",
@@ -525,6 +532,7 @@ export default function PlaygroundPage({
   const [sessionActive, setSessionActive] = useState(false);
   // Live-runner reachability: checked on mount, cached 60s, click dot to re-check.
   const [runner, setRunner] = useState<{ ok: boolean; langs: string[]; at: number } | null>(null);
+  const runnerRef = useRef<{ ok: boolean; langs: string[]; at: number } | null>(null);
   const offRef = useRef({ so: 0, se: 0 });
   const remOutRef = useRef("");
   const remErrRef = useRef("");
@@ -669,28 +677,47 @@ export default function PlaygroundPage({
 
   /* ── Live runner session (interactive backend) ── */
 
-  const checkRunner = useCallback(async (timeoutMs = 5000): Promise<boolean> => {
-    try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const checkRunner = useCallback(
+    async (timeoutMs = 5000): Promise<boolean> => {
+      const fetchLangs = async (url: string) => {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+          const r = await fetch(url, { signal: ctrl.signal });
+          if (!r.ok) throw new Error(`runner check (${r.status})`);
+          const d = (await r.json().catch(() => ({}))) as {
+            supported?: Record<string, boolean>;
+          };
+          const supported = d?.supported ?? {};
+          const langs = Object.keys(supported).filter((k) => supported[k]);
+          const info = { ok: true, langs, at: Date.now() };
+          setRunner(info);
+          runnerRef.current = info;
+          return true;
+        } finally {
+          clearTimeout(t);
+        }
+      };
       try {
-        const r = await fetch("/api/proxy/exec/languages", { signal: ctrl.signal });
-        if (!r.ok) throw new Error(`runner check (${r.status})`);
-        const d = (await r.json().catch(() => ({}))) as {
-          supported?: Record<string, boolean>;
-        };
-        const supported = d?.supported ?? {};
-        const langs = Object.keys(supported).filter((k) => supported[k]);
-        setRunner({ ok: true, langs, at: Date.now() });
-        return true;
-      } finally {
-        clearTimeout(t);
+        return await fetchLangs("/api/proxy/exec/languages");
+      } catch {
+        try {
+          return await fetchLangs(`${BACKEND_BASE}/exec/languages`);
+        } catch {
+          const info = { ok: false, langs: [] as string[], at: Date.now() };
+          setRunner(info);
+          runnerRef.current = info;
+          return false;
+        }
       }
-    } catch {
-      setRunner({ ok: false, langs: [], at: Date.now() });
-      return false;
-    }
-  }, []);
+    },
+    []
+  );
+
+  // Keep ref in sync when runner changes via UI click
+  useEffect(() => {
+    runnerRef.current = runner;
+  }, [runner]);
 
   // Probe the runner on mount so the header dot reflects reality.
   useEffect(() => {
@@ -698,20 +725,32 @@ export default function PlaygroundPage({
   }, [checkRunner]);
 
   const postExec = useCallback(async (path: string, body: unknown, timeoutMs: number) => {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    const doFetch = async (base: string) => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const url = base === "/api/proxy" ? `${base}/exec${path}` : `${base}/exec${path}`;
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+          ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
+        });
+        const data = await r.json().catch(() => ({}));
+        return { ok: r.ok, status: r.status, data };
+      } finally {
+        clearTimeout(t);
+      }
+    };
     try {
-      const r = await fetch(`/api/proxy/exec${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      });
-      const data = await r.json().catch(() => ({}));
-      return { ok: r.ok, status: r.status, data };
-    } finally {
-      clearTimeout(t);
+      const viaProxy = await doFetch("/api/proxy");
+      // 404 means static export with no proxy route — fall back to direct
+      if (viaProxy.status !== 404) return viaProxy;
+    } catch {
+      /* try direct */
     }
+    return doFetch(BACKEND_BASE);
   }, []);
 
   /** Append a streamed chunk, splitting off complete lines. Prompts without
@@ -858,9 +897,28 @@ export default function PlaygroundPage({
         };
         try {
           const { so, se } = offRef.current;
-          const resp = await fetch(`/api/proxy/exec/poll/${sid}?so=${so}&se=${se}`);
-          r = await resp.json().catch(() => ({}));
-          if (!resp.ok) throw new Error(r?.error || `poll failed (${resp.status})`);
+          const tryPoll = async (base: string) => {
+            const url =
+              base === "/api/proxy"
+                ? `${base}/exec/poll/${sid}?so=${so}&se=${se}`
+                : `${base}/exec/poll/${sid}?so=${so}&se=${se}`;
+            const resp = await fetch(url, {
+              ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
+            });
+            const body = await resp.json().catch(() => ({}));
+            if (!resp.ok) throw new Error(body?.error || `poll failed (${resp.status})`);
+            return body;
+          };
+          try {
+            r = await tryPoll("/api/proxy");
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (msg.includes("404") || msg.includes("Failed to fetch")) {
+              r = await tryPoll(BACKEND_BASE);
+            } else {
+              throw e;
+            }
+          }
         } catch (e) {
           if (sessionRef.current?.id !== sid) return;
           pushT("err", e instanceof Error ? e.message : "Lost connection to the runner.");
@@ -895,12 +953,23 @@ export default function PlaygroundPage({
       sessionRef.current = null;
       if (pollRef.current) clearInterval(pollRef.current);
       if (s) {
+        const payload = JSON.stringify({ session_id: s.id });
         void fetch("/api/proxy/exec/kill", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: s.id }),
+          body: payload,
           keepalive: true,
-        }).catch(() => {});
+        })
+          .catch(() =>
+            fetch(`${BACKEND_BASE}/exec/kill`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: payload,
+              keepalive: true,
+              mode: "cors",
+            }).catch(() => {})
+          )
+          .catch(() => {});
       }
     };
   }, []);
@@ -918,13 +987,27 @@ export default function PlaygroundPage({
       boxLines.push(...rawBox.split("\n"));
       if (boxLines.length > 0 && boxLines[boxLines.length - 1] === "") boxLines.pop();
     }
-    // If the program reads stdin but nothing was provided anywhere, hint
-    // once and keep going — it will see end-of-input on the batch engines.
-    if (queueRef.current.length === 0 && boxLines.length === 0 && readsStdin(code, language)) {
-      pushT(
-        "sys",
-        `reads input (${INPUT_HINT[language] ?? "stdin"}) — put it in the INPUT box above, or type it in the terminal. JS reads it live mid-run.`
-      );
+    const needsStdin = readsStdin(code, language);
+    const hasStdin = !(queueRef.current.length === 0 && boxLines.length === 0);
+    if (needsStdin && !hasStdin) {
+      if (language === "javascript") {
+        pushT("sys", `reads input (${INPUT_HINT[language] ?? "stdin"}) — type it in the terminal; JS reads live mid-run.`);
+      } else if (runner?.ok && runner.langs.includes(language)) {
+        pushT(
+          "sys",
+          `reads input (${INPUT_HINT[language] ?? "stdin"}) — you can type it live in the terminal after Run, or pre-fill the INPUT box.`
+        );
+      } else if (runner?.ok) {
+        pushT(
+          "sys",
+          `reads input (${INPUT_HINT[language] ?? "stdin"}) — live runner lacks ${language} toolchain (has: ${runner.langs.join(", ") || "none"}), so put values in the INPUT box above.`
+        );
+      } else {
+        pushT(
+          "sys",
+          `reads input (${INPUT_HINT[language] ?? "stdin"}) — put it in the INPUT box above, or type it in the terminal when the live runner is reachable.`
+        );
+      }
     }
     setStatus("running");
     setResult(null);
@@ -945,26 +1028,44 @@ export default function PlaygroundPage({
     // INPUT box + queued terminal lines as stdin.
     if (language !== "javascript") {
       let live: boolean;
-      if (runner && Date.now() - runner.at < 60000) {
-        live = runner.ok;
+      let cur = runnerRef.current ?? runner;
+      if (cur && Date.now() - cur.at < 60000) {
+        live = cur.ok;
       } else {
         pushT("sys", "checking live runner…");
         live = await checkRunner(7000);
+        cur = runnerRef.current;
       }
-      if (live) {
+      const liveSupportsLang = live && (cur?.langs.includes(language) ?? true);
+      // If the runner is reachable but reports no toolchain for this language,
+      // tell the user exactly that instead of a generic "unreachable".
+      if (live && !liveSupportsLang) {
+        pushT("sys", `live runner reachable but no ${language} toolchain — batch mode only (pre-typed stdin).`);
+        pushT("sys", `backend at ${BACKEND_BASE} reports [${(cur?.langs ?? []).join(", ") || "none"}]; redeploy the Docker image with ${language === "java" ? "default-jdk-headless" : language === "go" ? "golang-go" : "the"} toolchain.`);
+      }
+      if (liveSupportsLang) {
         const mode = await startInteractive(startedAt, boxLines);
         if (mode !== null) return;
         pushT("sys", "live run failed — batch mode (pre-typed stdin only).");
-      } else {
+      } else if (!live) {
         pushT("sys", "live runner unreachable — batch mode (pre-typed stdin only).");
       }
-      // No live runner: batch engines need every stdin line upfront and can
-      // never ask mid-run — refuse an empty run instead of crashing on EOF.
+      // Batch engines need every stdin line upfront and can never ask mid-run
+      // — refuse an empty run instead of crashing on EOF.
       const probe = [...boxLines, ...queueRef.current].join("\n");
-      if (probe.trim() === "" && readsStdin(code, language)) {
-        pushT("err", `no stdin provided, but this program reads input (${INPUT_HINT[language] ?? "stdin"}).`);
-        pushT("sys", "fill the INPUT box above and press Run again.");
-        pushT("sys", "for live mid-run prompts the backend runner must be reachable (redeploy it with the new code).");
+      if (probe.trim() === "" && needsStdin) {
+        if (liveSupportsLang) {
+          pushT("err", `no stdin provided, but this program reads input (${INPUT_HINT[language] ?? "stdin"}).`);
+          pushT("sys", "live session should have prompted you — it failed. Retry, or fill the INPUT box and Run again.");
+        } else if (live && !liveSupportsLang) {
+          pushT("err", `no stdin provided, but this program reads input (${INPUT_HINT[language] ?? "stdin"}).`);
+          pushT("sys", `the live runner cannot prompt for ${language} (no toolchain). Fill the INPUT box above (one value per line: e.g. Saket\\n21\\n90) and press Run again.`);
+          pushT("sys", `to enable live prompts, redeploy the backend Docker image with ${language === "java" ? "JDK" : "the " + language + " toolchain"}.`);
+        } else {
+          pushT("err", `no stdin provided, but this program reads input (${INPUT_HINT[language] ?? "stdin"}).`);
+          pushT("sys", "fill the INPUT box above and press Run again.");
+          pushT("sys", "for live mid-run prompts the backend runner must be reachable — check that /exec/languages is ok and that CORS allows this origin.");
+        }
         setStatus("error");
         stopTimer();
         return;
@@ -1004,39 +1105,47 @@ export default function PlaygroundPage({
     // Backend batch engine (POST /execute): authoritative routing by the
     // `language` field, stdin via write+close. Returns null when the backend
     // can't serve it so the caller falls back to the cloud sandbox.
+    // Tries the Next.js proxy first, then direct BACKEND_BASE (for static GH Pages).
     const runBatchBackend = async (stdinStr: string): Promise<RunResult | null> => {
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 45000);
-        let r: Response;
-        let data: {
-          success?: boolean; stdout?: string; stderr?: string;
-          compile_output?: string; exit_code?: number | null;
-          execution_time?: number; error_type?: string | null; language?: string;
-        };
+      const tryBackend = async (base: string, path: string): Promise<RunResult | null> => {
         try {
-          r = await fetch("/api/proxy/execute", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ language, code, stdin: stdinStr, filename, timeout: 15 }),
-            signal: ctrl.signal,
-          });
-          data = await r.json().catch(() => ({}));
-        } finally {
-          clearTimeout(t);
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 45000);
+          let r: Response;
+          let data: {
+            success?: boolean; stdout?: string; stderr?: string;
+            compile_output?: string; exit_code?: number | null;
+            execution_time?: number; error_type?: string | null; language?: string;
+          };
+          try {
+            const url = base === "/api/proxy" ? `${base}${path}` : `${base}${path}`;
+            r = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ language, code, stdin: stdinStr, filename, timeout: 15 }),
+              signal: ctrl.signal,
+              ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
+            });
+            data = await r.json().catch(() => ({}));
+          } finally {
+            clearTimeout(t);
+          }
+          if (!r.ok) return null;
+          return {
+            stdout: data.stdout ?? "",
+            stderr: data.stderr ?? "",
+            compile_output: data.compile_output ?? "",
+            exit_code: data.exit_code ?? null,
+            runtime: `${data.language ?? language} (backend)`,
+            time_ms: data.execution_time != null ? Math.round(data.execution_time * 1000) : undefined,
+          };
+        } catch {
+          return null;
         }
-        if (!r.ok) return null;
-        return {
-          stdout: data.stdout ?? "",
-          stderr: data.stderr ?? "",
-          compile_output: data.compile_output ?? "",
-          exit_code: data.exit_code ?? null,
-          runtime: `${data.language ?? language} (backend)`,
-          time_ms: data.execution_time != null ? Math.round(data.execution_time * 1000) : undefined,
-        };
-      } catch {
-        return null;
-      }
+      };
+      const viaProxy = await tryBackend("/api/proxy", "/execute");
+      if (viaProxy) return viaProxy;
+      return tryBackend(BACKEND_BASE, "/execute");
     };
 
     // Browser engines consume stdin progressively; batch engines get one
@@ -1049,17 +1158,31 @@ export default function PlaygroundPage({
 
     // Browser engines consume the queued terminal lines progressively;
     // remote toolchains get a snapshot taken at Run time.
+    // Tries the Next.js API route first, then direct Godbolt via backend
+    // batch (already tried) — final fallback is the cloud sandbox.
     const runRemote = async (stdinStr: string) => {
-      const r = await fetch("/api/playground", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language, code, stdin: stdinStr, filename }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        throw new Error(data?.error || `Execution failed (${r.status})`);
+      const tryPlayground = async (url: string, opts?: RequestInit) => {
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ language, code, stdin: stdinStr, filename }),
+          ...(opts || {}),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data?.error || `Execution failed (${r.status})`);
+        return data as RunResult;
+      };
+      try {
+        return await tryPlayground("/api/playground");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.includes("404") || msg.includes("Failed to fetch")) {
+          // On static GH Pages the API route is missing — the batch backend
+          // already failed above, so surface the same error clearly.
+          throw new Error(`cloud sandbox unreachable (static hosting has no /api/playground). ${msg}`);
+        }
+        throw e;
       }
-      return data as RunResult;
     };
 
     try {
