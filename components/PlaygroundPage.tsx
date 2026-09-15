@@ -187,7 +187,7 @@ const LIVE_LANGS = ["javascript", "python", "typescript", "java", "c", "cpp", "g
  *  unavailable (e.g. static GitHub Pages export). The proxy at
  *  /api/proxy/* is preferred when present (avoids CORS). */
 const BACKEND_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE_URL || "https://developer-portfolio-backend-bu76.onrender.com"
+  process.env.NEXT_PUBLIC_API_BASE_URL || "https://deviq-backend-x6a9.onrender.com"
 ).replace(/\/$/, "");
 
 /** How each language reads a line from stdin (shown in the terminal hint). */

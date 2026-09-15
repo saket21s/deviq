@@ -259,7 +259,7 @@ function normalizeProvider(provider?: string): "google" | "github" | "email" | u
   return undefined;
 }
 
-const BACKEND = "https://developer-portfolio-backend-bu76.onrender.com";
+const BACKEND = "https://deviq-backend-x6a9.onrender.com";
 
 function normalizeAvatarUrl(url?: string): string | undefined {
   const raw = (url || "").trim();
@@ -344,7 +344,7 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
     }
   }
 
-  const BACKEND = "https://developer-portfolio-backend-bu76.onrender.com";
+  const BACKEND = "https://deviq-backend-x6a9.onrender.com";
   const base = BACKEND;
   console.log(`🌐 API Request: ${base}${path}`, {
     method: opts.method || 'GET',

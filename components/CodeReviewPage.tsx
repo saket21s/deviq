@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PlaygroundTheme } from "./PlaygroundPage";
 
-const BACKEND = "https://developer-portfolio-backend-bu76.onrender.com";
+const BACKEND = "https://deviq-backend-x6a9.onrender.com";
 
 /* ── Types ─────────────────────────────────────────── */
 export interface ReviewBug {

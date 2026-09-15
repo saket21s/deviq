@@ -132,7 +132,7 @@ export async function exchangeCodeForToken(
   clearPendingOAuth();
 
   // ── 2. Exchange code with backend (keeps secrets server-side) ──────────
-  const API = "https://developer-portfolio-backend-bu76.onrender.com";
+  const API = "https://deviq-backend-x6a9.onrender.com";
   const redirectUri = `${window.location.origin}/auth/callback/${provider}`;
 
   const res = await fetch(`${API}/auth/oauth`, {
