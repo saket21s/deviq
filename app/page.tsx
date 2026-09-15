@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useRef, CSSProperties, ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, CSSProperties, ReactNode } from "react";
 import { Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -50,7 +50,15 @@ interface ConnectedAccount {
   last_synced_at: string;
 }
 interface StepItem { label: string; status: "pending" | "active" | "done" | "error"; }
-interface RepoItem { name: string; stars: number; forks: number; language?: string; description?: string; topics?: string[]; }
+interface RepoItem {
+  name: string;
+  stars?: number; forks?: number;
+  // raw GitHub API shapes (backend returns these directly)
+  stargazers_count?: number; forks_count?: number;
+  language?: string | null; description?: string | null; topics?: string[];
+  html_url?: string; fork?: boolean;
+  updated_at?: string; pushed_at?: string;
+}
 interface GithubAnalytics {
   total_projects: number; total_stars: number; recent_projects: number;
   skill_score: number; most_used_language?: string;
@@ -259,7 +267,22 @@ function normalizeProvider(provider?: string): "google" | "github" | "email" | u
   return undefined;
 }
 
-const BACKEND = "https://deviq-backend-x6a9.onrender.com";
+const RENDER_BACKEND = "https://deviq-backend-x6a9.onrender.com";
+const LOCAL_BACKEND = "http://localhost:8000";
+
+function resolveBackend(): string {
+  const env = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (env) return env;
+  try {
+    if (typeof window !== "undefined") {
+      const h = window.location.hostname;
+      if (h === "localhost" || h === "127.0.0.1") return LOCAL_BACKEND;
+    }
+  } catch { /* SSR — fall through to hosted backend */ }
+  return RENDER_BACKEND;
+}
+
+const BACKEND = resolveBackend();
 
 function normalizeAvatarUrl(url?: string): string | undefined {
   const raw = (url || "").trim();
@@ -344,7 +367,6 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
     }
   }
 
-  const BACKEND = "https://deviq-backend-x6a9.onrender.com";
   const base = BACKEND;
   console.log(`🌐 API Request: ${base}${path}`, {
     method: opts.method || 'GET',
@@ -1059,21 +1081,673 @@ function Badge({ label, color, bg, border }: { label: string; color: string; bg:
 }
 
 /* ─────────────────────────────────────────────────
-   REPO CARD
+   REPOSITORIES — language colors, normalization, cards
 ───────────────────────────────────────────────── */
-function RepoCard({ repo, tk, gh }: { repo: RepoItem; tk: Theme; gh: string }) {
-  const [hov, setHov] = useState(false);
+const LANG_COLORS: Record<string, string> = {
+  JavaScript: "#f1e05a", TypeScript: "#3178c6", Python: "#3572A5", Java: "#b07219",
+  HTML: "#e34c26", CSS: "#563d7c", QML: "#44a51c", "C++": "#f34b7d", C: "#555555",
+  "C#": "#178600", Go: "#00ADD8", Rust: "#dea584", Ruby: "#701516", PHP: "#4F5D95",
+  Swift: "#F05138", Kotlin: "#A97BFF", Dart: "#00B4AB", Shell: "#89e051",
+  Dockerfile: "#384d54", Vue: "#41b883", Svelte: "#ff3e00", Jupyter: "#DA5B0B",
+  R: "#198CE7", Scala: "#c22d40", Lua: "#000080", Elixir: "#6e4a7e",
+  Haskell: "#5e5086", Clojure: "#db5855", ObjectiveC: "#438eff", PowerShell: "#012456",
+  Matlab: "#e16737", Groovy: "#4298b8",
+};
+
+interface NormalizedRepo {
+  name: string; stars: number; forks: number;
+  language?: string; description?: string; topics: string[];
+  url: string; isFork: boolean; updatedAt?: string;
+}
+
+function normalizeRepo(repo: RepoItem, gh: string): NormalizedRepo {
+  const r = repo as unknown as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() ? v : undefined;
+  return {
+    name: str(r.name) ?? "untitled",
+    stars: num(r.stars) ?? num(r.stargazers_count) ?? num((r as { stargazers?: unknown }).stargazers) ?? 0,
+    forks: num(r.forks) ?? num(r.forks_count) ?? 0,
+    language: (typeof r.language === "string" && r.language) ? r.language : undefined,
+    description: str(r.description),
+    topics: Array.isArray(r.topics) ? (r.topics as unknown[]).filter((t): t is string => typeof t === "string").slice(0, 3) : [],
+    url: str(r.html_url) ?? `https://github.com/${gh}/${str(r.name) ?? ""}`,
+    isFork: r.fork === true,
+    updatedAt: str(r.pushed_at) ?? str(r.updated_at),
+  };
+}
+
+function langColor(lang: string | undefined, tk: Theme): string {
+  if (!lang) return tk.text3;
+  return LANG_COLORS[lang] ?? tk.blue;
+}
+
+function timeAgo(iso?: string): string | undefined {
+  if (!iso) return undefined;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return undefined;
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+/* ─────────────────────────────────────────────────
+   REPO FILE-STRUCTURE PREVIEW (hover)
+───────────────────────────────────────────────── */
+interface RepoTreeEntry { path: string; type: "blob" | "tree"; }
+interface RepoTreeData {
+  owner: string; repo: string; branch: string;
+  truncated: boolean; total_files: number; total_dirs: number;
+  entries: RepoTreeEntry[]; empty?: boolean;
+}
+
+const repoTreeCache = new Map<string, RepoTreeData>();
+const repoTreeInflight = new Map<string, Promise<RepoTreeData>>();
+
+function repoTreeKey(owner: string, repo: string): string {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+}
+
+async function fetchRepoTree(owner: string, repo: string): Promise<RepoTreeData> {
+  const key = repoTreeKey(owner, repo);
+  const cached = repoTreeCache.get(key);
+  if (cached) return cached;
+  const inflight = repoTreeInflight.get(key);
+  if (inflight) return inflight;
+  const task = (async (): Promise<RepoTreeData> => {
+    // 1. Preferred: backend proxy (authenticated, cached, CORS-friendly)
+    try {
+      const r = await fetch(`${BACKEND}/repo-tree/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, { mode: "cors" });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && Array.isArray(j.entries)) {
+          const data = j as RepoTreeData;
+          repoTreeCache.set(key, data);
+          return data;
+        }
+      } else {
+        // Our endpoint reports unknown repos explicitly; anything else
+        // (e.g. an older backend without this route) falls through to the public API.
+        let detail = "";
+        try { detail = ((await r.json())?.detail as string) || ""; } catch { /* HTML error page */ }
+        if (/repository not found/i.test(detail)) throw new Error("Repository not found");
+        if (r.status === 429 || /rate limit/i.test(detail)) throw new Error("GitHub rate limit exceeded, try again later");
+      }
+    } catch (e) {
+      if (e instanceof Error && (/not found/i.test(e.message) || /rate limit/i.test(e.message))) throw e;
+      // network / backend missing the new route → fall through to public API
+    }
+    // 2. Fallback: public GitHub API (works for public repos, no token)
+    const meta = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+    if (!meta.ok) throw new Error(meta.status === 404 ? "Repository not found" : `GitHub API ${meta.status}`);
+    const branch = (((await meta.json()).default_branch as string) || "main");
+    const t = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+    if (t.status === 404 || t.status === 409) {
+      const data: RepoTreeData = { owner, repo, branch, truncated: false, total_files: 0, total_dirs: 0, entries: [], empty: true };
+      repoTreeCache.set(key, data);
+      return data;
+    }
+    if (!t.ok) throw new Error("File list unavailable");
+    const j = await t.json();
+    const raw: unknown[] = Array.isArray(j.tree) ? j.tree : [];
+    const entries: RepoTreeEntry[] = raw
+      .filter((e): e is { path: string; type: string } => !!e && typeof (e as { path?: unknown }).path === "string" && !(e as { path: string }).path.startsWith(".git/"))
+      .filter(e => e.path.split("/").length <= 4)
+      .slice(0, 220)
+      .map(e => ({ path: e.path, type: e.type === "tree" ? "tree" as const : "blob" as const }));
+    entries.sort((a, b) => (a.type === b.type ? a.path.localeCompare(b.path) : a.type === "tree" ? -1 : 1));
+    const data: RepoTreeData = {
+      owner, repo, branch,
+      truncated: !!j.truncated || raw.length > entries.length,
+      total_files: entries.filter(e => e.type === "blob").length,
+      total_dirs: entries.filter(e => e.type === "tree").length,
+      entries,
+    };
+    repoTreeCache.set(key, data);
+    return data;
+  })();
+  repoTreeInflight.set(key, task);
+  try {
+    return await task;
+  } finally {
+    repoTreeInflight.delete(key);
+  }
+}
+
+function useRepoTree(owner: string, repo: string, enabled: boolean, attempt = 0) {
+  const [state, setState] = useState<{ loading: boolean; data?: RepoTreeData; error?: string }>({ loading: true });
+  useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    setState({ loading: true });
+    fetchRepoTree(owner, repo)
+      .then(data => { if (live) setState({ loading: false, data }); })
+      .catch((e: unknown) => { if (live) setState({ loading: false, error: e instanceof Error ? e.message : "Couldn't load files" }); });
+    return () => { live = false; };
+  }, [owner, repo, enabled, attempt]);
+  return state;
+}
+
+interface TreeNode { name: string; isDir: boolean; children: TreeNode[]; }
+
+function buildRepoTree(entries: RepoTreeEntry[]): TreeNode[] {
+  const root: TreeNode = { name: "", isDir: true, children: [] };
+  for (const e of entries) {
+    const parts = e.path.split("/").filter(Boolean);
+    if (!parts.length) continue;
+    let cur = root;
+    parts.forEach((part, i) => {
+      const last = i === parts.length - 1;
+      let child = cur.children.find(c => c.name === part);
+      if (!child) {
+        child = { name: part, isDir: last ? e.type === "tree" : true, children: [] };
+        cur.children.push(child);
+      } else if (!last) {
+        child.isDir = true;
+      }
+      cur = child;
+    });
+  }
+  const sortAll = (nodes: TreeNode[]) => {
+    nodes.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+    nodes.forEach(n => sortAll(n.children));
+  };
+  sortAll(root.children);
+  return root.children;
+}
+
+function TreeFolderIcon({ tk }: { tk: Theme }) {
   return (
-    <a href={`https://github.com/${gh}/${repo.name}`} target="_blank" rel="noopener noreferrer"
-      onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      onTouchEnd={() => setHov(false)}
-      style={{ padding: "13px 15px", borderRight: `1px solid ${tk.border}`, borderBottom: `1px solid ${tk.border}`, background: hov ? tk.bgAlt : "transparent", transition: "background 0.12s", textDecoration: "none", display: "flex", flexDirection: "column", justifyContent: "space-between", minHeight: "80px" }}>
-      <div style={{ fontSize: 12, fontWeight: 500, color: hov ? tk.blue : tk.text, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", transition: "color 0.12s" }}>{repo.name}</div>
-      <div style={{ display: "flex", gap: 12, fontSize: 11, color: tk.text3, marginBottom: repo.language ? 8 : 0 }}>
-        <span>{repo.stars} stars</span><span>{repo.forks} forks</span>
+    <svg width={13} height={13} viewBox="0 0 16 16" fill={tk.blue} style={{ flexShrink: 0 }}>
+      <path d="M1.5 3.5a.5.5 0 0 1 .5-.5h4l1.5 2h5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-8Z" opacity="0.9" />
+    </svg>
+  );
+}
+
+function TreeFileIcon({ tk }: { tk: Theme }) {
+  return (
+    <svg width={13} height={13} viewBox="0 0 16 16" fill="none" stroke={tk.text3} strokeWidth="1.5" style={{ flexShrink: 0 }}>
+      <path d="M3.5 1.5h5.25L12.5 5.25v9.25a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-12a.5.5 0 0 1 .5-.5Z" />
+      <path d="M8.5 1.5v3.75h3.75" />
+    </svg>
+  );
+}
+
+const TREE_TOP = 12;
+const TREE_KIDS = 4;
+
+function RepoTreeBody({ data, tk }: { data: RepoTreeData; tk: Theme }) {
+  const roots = useMemo(() => buildRepoTree(data.entries), [data]);
+  if (data.empty || roots.length === 0) {
+    return <div style={{ padding: "18px 16px", fontSize: 12.5, color: tk.text3, fontStyle: "italic", textAlign: "center" as const }}>This repository is empty.</div>;
+  }
+  const shown = roots.slice(0, TREE_TOP);
+  const hiddenRoots = roots.length - shown.length;
+  return (
+    <div style={{ padding: "8px 10px 10px", overflowY: "auto" as const }}>
+      {shown.map(n => (
+        <div key={n.name}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "3.5px 6px", borderRadius: 6, fontSize: 12, color: n.isDir ? tk.text : tk.text2, fontWeight: n.isDir ? 600 : 400 }}>
+            {n.isDir ? <TreeFolderIcon tk={tk} /> : <TreeFileIcon tk={tk} />}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{n.name}</span>
+            {n.isDir && n.children.length > 0 && (
+              <span style={{ marginLeft: "auto", fontSize: 10.5, color: tk.text3, fontVariantNumeric: "tabular-nums" as const, flexShrink: 0 }}>{n.children.length}</span>
+            )}
+          </div>
+          {n.isDir && n.children.slice(0, TREE_KIDS).map(k => (
+            <div key={k.name} style={{ display: "flex", alignItems: "center", gap: 7, padding: "3px 6px 3px 26px", fontSize: 11.5, color: tk.text2 }}>
+              {k.isDir ? <TreeFolderIcon tk={tk} /> : <TreeFileIcon tk={tk} />}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{k.name}{k.isDir ? "/" : ""}</span>
+            </div>
+          ))}
+          {n.isDir && n.children.length > TREE_KIDS && (
+            <div style={{ padding: "1px 6px 3px 26px", fontSize: 11, color: tk.text3 }}>+ {n.children.length - TREE_KIDS} more</div>
+          )}
+        </div>
+      ))}
+      {(hiddenRoots > 0 || data.truncated) && (
+        <div style={{ padding: "6px 6px 2px", fontSize: 11, color: tk.text3 }}>
+          {hiddenRoots > 0 ? `+ ${hiddenRoots} more items` : "Truncated preview"}{data.truncated ? " — full tree on GitHub" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RepoTreePopup({ owner, repoName, repoUrl, tk, pos, sheet, attempt, onRetry, onClose }: {
+  owner: string; repoName: string; repoUrl: string; tk: Theme;
+  pos: { left: number; top: number; width: number } | null;
+  sheet: boolean; attempt: number;
+  onRetry: () => void; onClose: () => void;
+}) {
+  const tree = useRepoTree(owner, repoName, true, attempt);
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (!tree.loading) { setSlow(false); return; }
+    const t = window.setTimeout(() => setSlow(true), 4000);
+    return () => clearTimeout(t);
+  }, [tree.loading]);
+  const style: CSSProperties = sheet
+    ? { position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 90, maxHeight: "62vh" }
+    : { position: "fixed", left: pos?.left ?? -9999, top: pos?.top ?? 0, width: pos?.width ?? 300, zIndex: 90, maxHeight: 350 };
+  return (
+    <div className="fu" role="dialog" aria-label={`File structure of ${repoName}`}
+      style={{ ...style, display: "flex", flexDirection: "column", overflow: "hidden", background: tk.surface, border: `1px solid ${tk.borderStrong}`, borderRadius: 12, boxShadow: tk.shadowLg }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: `1px solid ${tk.border}`, flexShrink: 0 }}>
+        <TreeFolderIcon tk={tk} />
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: tk.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" as const }}>{repoName}</span>
+        {tree.data && (
+          <span style={{ fontSize: 10, fontWeight: 600, color: tk.text3, border: `1px solid ${tk.border}`, borderRadius: 20, padding: "2px 8px", flexShrink: 0 }}>{tree.data.branch}</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <button onClick={onClose} aria-label="Close file preview"
+          style={{ border: `1px solid ${tk.border}`, background: "transparent", color: tk.text3, borderRadius: 6, width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 12, lineHeight: 1 }}>
+          ✕
+        </button>
       </div>
-      {repo.language && <span style={{ fontSize: 10, fontWeight: 500, color: tk.blue, padding: "2px 7px", borderRadius: 4, background: tk.blueLight, border: `1px solid ${tk.blueBorder}` }}>{repo.language}</span>}
+      {tree.loading ? (
+        <div style={{ padding: "12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {[72, 46, 61, 38, 56, 50].map((w, i) => (
+            <div key={i} style={{ height: 12, width: `${w}%`, borderRadius: 4, background: tk.bgAlt, animation: "shimmer 1.2s ease-in-out infinite" }} />
+          ))}
+          {slow && <div style={{ fontSize: 11, color: tk.text3, paddingTop: 4 }}>Waking up the server — first load can take ~30s…</div>}
+        </div>
+      ) : tree.error ? (
+        <div style={{ padding: "20px 16px", textAlign: "center" as const }}>
+          <div style={{ fontSize: 12.5, color: tk.text2, marginBottom: 10 }}>{tree.error}</div>
+          <button onClick={onRetry} style={{ fontSize: 12, fontWeight: 600, color: tk.blue, background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, borderRadius: 7, padding: "6px 16px", cursor: "pointer" }}>Retry</button>
+        </div>
+      ) : tree.data ? (
+        <RepoTreeBody data={tree.data} tk={tk} />
+      ) : null}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderTop: `1px solid ${tk.border}`, flexShrink: 0 }}>
+        {tree.data && !tree.loading && !tree.error && (
+          <span style={{ fontSize: 11, color: tk.text3, fontVariantNumeric: "tabular-nums" as const }}>{tree.data.total_files} files · {tree.data.total_dirs} folders</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <a href={`${repoUrl}/tree/${tree.data?.branch ?? "HEAD"}`} target="_blank" rel="noopener noreferrer"
+          style={{ fontSize: 11.5, fontWeight: 600, color: tk.blue, textDecoration: "none" }}>
+          View on GitHub →
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function RepoCard({ repo, owner, tk, delay = 0, isMobile }: { repo: NormalizedRepo; owner: string; tk: Theme; delay?: number; isMobile: boolean }) {
+  const [hov, setHov] = useState(false);
+  const [hoverPreview, setHoverPreview] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [sheet, setSheet] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const enterTimer = useRef<number | null>(null);
+  const leaveTimer = useRef<number | null>(null);
+  const dot = langColor(repo.language, tk);
+  const updated = timeAgo(repo.updatedAt);
+  const showPreview = hoverPreview || pinned;
+
+  const clearTimers = () => {
+    if (enterTimer.current !== null) { clearTimeout(enterTimer.current); enterTimer.current = null; }
+    if (leaveTimer.current !== null) { clearTimeout(leaveTimer.current); leaveTimer.current = null; }
+  };
+
+  useEffect(() => clearTimers, []);
+
+  const computePos = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el || typeof window === "undefined") return;
+    if (isMobile || window.innerWidth < 720) { setSheet(true); setPos(null); return; }
+    setSheet(false);
+    const r = el.getBoundingClientRect();
+    const W = Math.min(300, window.innerWidth - 24), GAP = 12;
+    const rightFits = r.right + GAP + W <= window.innerWidth;
+    let left = rightFits ? r.right + GAP : r.left - GAP - W;
+    // Clamp into the viewport so the panel is never stranded off-screen
+    // (it may overlap the card in tight layouts, but stays visible).
+    left = Math.max(12, Math.min(left, window.innerWidth - W - 12));
+    setPos({
+      left,
+      top: Math.max(12, Math.min(r.top, window.innerHeight - 370)),
+      width: W,
+    });
+  }, [isMobile]);
+
+  // Keep hover previews from going stale on scroll/resize; pinned ones follow the card.
+  useEffect(() => {
+    if (!showPreview || typeof window === "undefined") return;
+    const onScroll = () => {
+      if (pinned) computePos();
+      else setHoverPreview(false);
+    };
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [showPreview, pinned, computePos]);
+
+  const handleEnter = () => {
+    setHov(true);
+    if (pinned) return;
+    if (leaveTimer.current !== null) { clearTimeout(leaveTimer.current); leaveTimer.current = null; }
+    // Near-instant when cached, short intent-delay otherwise to avoid fetch storms
+    // when sweeping across the grid. (No pointer gate: hover events only fire
+    // on hover-capable pointers; touch users get the pin button instead.)
+    if (repoTreeCache.has(repoTreeKey(owner, repo.name))) {
+      computePos();
+      setHoverPreview(true);
+      return;
+    }
+    if (enterTimer.current === null) {
+      enterTimer.current = window.setTimeout(() => {
+        enterTimer.current = null;
+        computePos();
+        setHoverPreview(true);
+      }, 120);
+    }
+  };
+
+  const handleLeave = () => {
+    setHov(false);
+    if (enterTimer.current !== null) { clearTimeout(enterTimer.current); enterTimer.current = null; }
+    if (pinned) return;
+    if (leaveTimer.current === null) {
+      leaveTimer.current = window.setTimeout(() => {
+        leaveTimer.current = null;
+        setHoverPreview(false);
+      }, 150);
+    }
+  };
+
+  const closePreview = useCallback(() => {
+    clearTimers();
+    setPinned(false);
+    setHoverPreview(false);
+  }, []);
+
+  const togglePin = (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (pinned) {
+      closePreview();
+      return;
+    }
+    clearTimers();
+    computePos();
+    setPinned(true);
+  };
+
+  const retry = useCallback(() => {
+    repoTreeCache.delete(repoTreeKey(owner, repo.name));
+    setAttempt(a => a + 1);
+  }, [owner, repo.name]);
+  return (
+    <div
+      ref={wrapRef}
+      onMouseEnter={handleEnter} onMouseLeave={handleLeave}
+      className="fu"
+      style={{ animationDelay: `${Math.min(delay, 8) * 40}ms`, position: "relative", minWidth: 0 }}
+    >
+    <a
+      href={repo.url} target="_blank" rel="noopener noreferrer"
+      onFocus={() => setHov(true)} onBlur={() => setHov(false)}
+      style={{
+        display: "flex", flexDirection: "column", gap: 10,
+        padding: "15px 16px 13px", minHeight: 158,
+        border: `1px solid ${hov || showPreview ? tk.borderStrong : tk.border}`,
+        borderRadius: 12, background: (hov || showPreview) ? tk.surface : tk.bg,
+        boxShadow: (hov || showPreview) ? tk.shadowMd : "none",
+        transform: (hov || showPreview) ? "translateY(-2px)" : "none",
+        transition: "transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease, background 0.16s ease",
+        textDecoration: "none", minWidth: 0,
+      }}
+    >
+      {/* header: icon + name + external */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 10, minWidth: 0 }}>
+        <span style={{
+          flexShrink: 0, width: 30, height: 30, borderRadius: 8,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: tk.blueLight, border: `1px solid ${tk.blueBorder}`,
+        }}>
+          <svg width={15} height={15} viewBox="0 0 16 16" fill={tk.blue}>
+            <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1H4.5a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25v3.25a.25.25 0 0 0 .4.2l1.45-1.087a.249.249 0 0 1 .3 0L8.6 15.7a.25.25 0 0 0 .4-.2v-3.25a.25.25 0 0 0-.25-.25h-3.5a.25.25 0 0 0-.25.25Z" />
+          </svg>
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 13.5, fontWeight: 600, letterSpacing: "-0.01em",
+            color: hov ? tk.blue : tk.text, overflow: "hidden",
+            textOverflow: "ellipsis", whiteSpace: "nowrap", transition: "color 0.15s",
+          }}>
+            {repo.name}
+          </div>
+          {updated && <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>Updated {updated}</div>}
+        </div>
+        <span style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          {repo.isFork && (
+            <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "0.03em", padding: "2px 7px", borderRadius: 20, border: `1px solid ${tk.border}`, color: tk.text3, background: "transparent" }}>Fork</span>
+          )}
+          <span
+            role="button" tabIndex={0} aria-label={pinned ? "Hide file structure" : "Preview file structure"}
+            title={pinned ? "Hide file structure" : "Preview file structure"}
+            onClick={togglePin}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") togglePin(e); }}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 24, height: 24, borderRadius: 7, cursor: "pointer",
+              border: `1px solid ${pinned ? tk.blueBorder : "transparent"}`,
+              background: pinned ? tk.blueLight : "transparent",
+              transition: "background 0.14s, border-color 0.14s",
+            }}
+          >
+            <svg width={13} height={13} viewBox="0 0 16 16" fill={pinned ? tk.blue : tk.text3} style={{ opacity: pinned || hov ? 1 : 0.6 }}>
+              <path d="M1.5 3.5a.5.5 0 0 1 .5-.5h4l1.5 2h5a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-8Z" />
+            </svg>
+          </span>
+          <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={hov ? tk.blue : tk.text3} strokeWidth="2" style={{ transition: "stroke 0.15s", opacity: hov ? 1 : 0.6 }}>
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+        </span>
+      </div>
+
+      {/* description */}
+      <div style={{
+        fontSize: 12.5, lineHeight: 1.55, color: repo.description ? tk.text2 : tk.text3,
+        display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const,
+        overflow: "hidden", minHeight: 38, fontStyle: repo.description ? "normal" : "italic",
+      }}>
+        {repo.description ?? "No description provided"}
+      </div>
+
+      {/* topics */}
+      {repo.topics.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+          {repo.topics.map(t => (
+            <span key={t} style={{ fontSize: 10, fontWeight: 500, color: tk.blue, background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, padding: "2px 8px", borderRadius: 20, maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span>
+          ))}
+        </div>
+      )}
+
+      {/* footer */}
+      <div style={{ marginTop: "auto", paddingTop: 10, borderTop: `1px solid ${tk.border}`, display: "flex", alignItems: "center", gap: 14 }}>
+        {repo.language ? (
+          <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: tk.text2, minWidth: 0 }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: dot, flexShrink: 0, boxShadow: `0 0 0 3px ${dot}22` }} />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{repo.language}</span>
+          </span>
+        ) : (
+          <span style={{ fontSize: 11.5, color: tk.text3 }}>—</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: tk.text2, fontVariantNumeric: "tabular-nums" }}>
+          <svg width={13} height={13} viewBox="0 0 16 16" fill={repo.stars > 0 ? tk.amber : tk.text3}>
+            <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z" />
+          </svg>
+          {repo.stars.toLocaleString()}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: tk.text2, fontVariantNumeric: "tabular-nums" }}>
+          <svg width={13} height={13} viewBox="0 0 16 16" fill={tk.text3}>
+            <path d="M5 5.372v.878c0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75v-.878a2.25 2.25 0 1 1 1.5 0v.878a2.25 2.25 0 0 1-2.25 2.25h-1.5v2.128a2.251 2.251 0 1 1-1.5 0V8.5h-1.5A2.25 2.25 0 0 1 3.5 6.25v-.878a2.25 2.25 0 1 1 1.5 0ZM5 3.25a.75.75 0 1 0 0 .002ZM11 3.25a.75.75 0 1 0 0 .002ZM8 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" />
+          </svg>
+          {repo.forks.toLocaleString()}
+        </span>
+      </div>
     </a>
+    {showPreview && (
+      <RepoTreePopup
+        owner={owner} repoName={repo.name} repoUrl={repo.url} tk={tk}
+        pos={pos} sheet={sheet} attempt={attempt}
+        onRetry={retry} onClose={closePreview}
+      />
+    )}
+    </div>
+  );
+}
+
+type RepoSort = "stars" | "forks" | "name" | "recent";
+
+function RepositoriesSection({ repos, gh, tk, isMobile }: { repos: RepoItem[]; gh: string; tk: Theme; isMobile: boolean }) {
+  const [query, setQuery] = useState("");
+  const [lang, setLang] = useState("All");
+  const [sort, setSort] = useState<RepoSort>("stars");
+  const [expanded, setExpanded] = useState(false);
+  const PAGE = 9;
+
+  const normalized = useMemo(() => repos.map(r => normalizeRepo(r, gh)), [repos, gh]);
+
+  const languages = useMemo(() => {
+    const counts: Record<string, number> = {};
+    normalized.forEach(r => { if (r.language) counts[r.language] = (counts[r.language] || 0) + 1; });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [normalized]);
+
+  const totalStars = useMemo(() => normalized.reduce((a, r) => a + r.stars, 0), [normalized]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = normalized.filter(r => {
+      if (lang !== "All" && r.language !== lang) return false;
+      if (!q) return true;
+      return (r.name.toLowerCase().includes(q) ||
+        (r.description ?? "").toLowerCase().includes(q) ||
+        r.topics.some(t => t.toLowerCase().includes(q)));
+    });
+    list = [...list].sort((a, b) => {
+      if (sort === "stars") return b.stars - a.stars || b.forks - a.forks || a.name.localeCompare(b.name);
+      if (sort === "forks") return b.forks - a.forks || b.stars - a.stars || a.name.localeCompare(b.name);
+      if (sort === "name") return a.name.localeCompare(b.name);
+      return (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "");
+    });
+    return list;
+  }, [normalized, query, lang, sort]);
+
+  const visible = expanded ? filtered : filtered.slice(0, PAGE);
+
+  useEffect(() => { setExpanded(false); }, [query, lang, sort]);
+
+  const pill = (active: boolean): CSSProperties => ({
+    fontSize: 11.5, fontWeight: active ? 600 : 500, padding: "5px 12px", borderRadius: 20,
+    border: `1px solid ${active ? tk.blueBorder : tk.border}`,
+    background: active ? tk.blueLight : "transparent",
+    color: active ? tk.blue : tk.text2, cursor: "pointer", whiteSpace: "nowrap" as const,
+    transition: "all 0.14s",
+  });
+
+  const selectStyle: CSSProperties = {
+    fontSize: 12, fontWeight: 500, color: tk.text2, background: tk.bg,
+    border: `1px solid ${tk.border}`, borderRadius: 8, padding: "7px 10px",
+    outline: "none", cursor: "pointer", fontFamily: "inherit",
+  };
+
+  return (
+    <div id="sec-repos" style={{ background: tk.surface, borderRadius: 12, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow, marginBottom: 8 }}>
+      {/* header */}
+      <div style={{ padding: isMobile ? "14px 16px 12px" : "15px 20px 13px", borderBottom: `1px solid ${tk.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: tk.text3 }}>Repositories</span>
+          <span style={{ fontSize: 11, fontWeight: 600, color: tk.blue, background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, borderRadius: 20, padding: "2px 9px", fontVariantNumeric: "tabular-nums" }}>{repos.length}</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 500, color: tk.amber, background: tk.amberLight, border: `1px solid ${tk.amberBorder}`, borderRadius: 20, padding: "2px 9px", fontVariantNumeric: "tabular-nums" }}>
+            <svg width={11} height={11} viewBox="0 0 16 16" fill={tk.amber}><path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z" /></svg>
+            {totalStars.toLocaleString()} stars
+          </span>
+          <span style={{ flex: 1 }} />
+          {!isMobile && filtered.length !== repos.length && (
+            <span style={{ fontSize: 11.5, color: tk.text3 }}>Showing {filtered.length} of {repos.length}</span>
+          )}
+        </div>
+        {/* toolbar */}
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: isMobile ? "wrap" : "nowrap" }}>
+          <div style={{ position: "relative", flex: 1, minWidth: isMobile ? "100%" : 200 }}>
+            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2" style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }}>
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              value={query} onChange={e => setQuery(e.target.value)} placeholder="Search repositories…"
+              spellCheck={false} autoComplete="off"
+              style={{ width: "100%", padding: "8px 12px 8px 33px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bg, color: tk.text, fontSize: 12.5, outline: "none", fontFamily: "inherit" }}
+            />
+          </div>
+          <select value={sort} onChange={e => setSort(e.target.value as RepoSort)} style={{ ...selectStyle, flexShrink: 0 }} aria-label="Sort repositories">
+            <option value="stars">Top starred</option>
+            <option value="forks">Most forked</option>
+            <option value="recent">Recently updated</option>
+            <option value="name">Name A–Z</option>
+          </select>
+        </div>
+        {/* language pills */}
+        {languages.length > 1 && (
+          <div style={{ display: "flex", gap: 6, marginTop: 10, overflowX: "auto", paddingBottom: 2 }}>
+            <button onClick={() => setLang("All")} style={pill(lang === "All")}>All</button>
+            {languages.slice(0, 8).map(([l, c]) => (
+              <button key={l} onClick={() => setLang(lang === l ? "All" : l)} style={pill(lang === l)} title={`${c} repos`}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: langColor(l, tk), display: "inline-block" }} />
+                  {l} <span style={{ opacity: 0.6, fontVariantNumeric: "tabular-nums" }}>{c}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* grid */}
+      {visible.length > 0 ? (
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill,minmax(265px,1fr))", gap: 12, padding: isMobile ? 14 : 18 }}>
+          {visible.map((r, i) => <RepoCard key={`${r.name}-${i}`} repo={r} owner={gh} tk={tk} delay={i % PAGE} isMobile={isMobile} />)}
+        </div>
+      ) : (
+        <div style={{ padding: "36px 20px", textAlign: "center" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, marginBottom: 6 }}>No repositories found</div>
+          <div style={{ fontSize: 12.5, color: tk.text3, marginBottom: 14 }}>Try a different search or language filter.</div>
+          <button onClick={() => { setQuery(""); setLang("All"); }} style={{ fontSize: 12.5, fontWeight: 600, color: tk.accentFg, background: tk.accent, border: "none", borderRadius: 8, padding: "8px 18px", cursor: "pointer" }}>Clear filters</button>
+        </div>
+      )}
+
+      {/* footer / show more */}
+      {filtered.length > PAGE && (
+        <div style={{ borderTop: `1px solid ${tk.border}`, padding: "12px 18px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <button
+            onClick={() => setExpanded(v => !v)}
+            style={{ fontSize: 12.5, fontWeight: 600, color: tk.blue, background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, borderRadius: 8, padding: "8px 20px", cursor: "pointer", transition: "all 0.14s" }}
+          >
+            {expanded ? "Show less" : `Show all ${filtered.length} repositories`}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -5738,12 +6412,7 @@ export default function Page() {
                 )}
                 <RoleSuggestion data={data} tk={tk} isMobile={isMobile} />
                 {data.github?.repositories && data.github.repositories.length > 0 && (
-                  <div id="sec-repos" style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow, marginBottom: 8 }}>
-                    <SectionHeader label="Repositories" tk={tk} right={<span style={{ fontSize: 11, color: tk.text3 }}>{data.github.repositories.length}</span>} />
-                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : `repeat(auto-fill,minmax(190px,1fr))`, gap: 0 }}>
-                      {data.github.repositories.map((r, i) => <RepoCard key={i} repo={r} tk={tk} gh={gh} />)}
-                    </div>
-                  </div>
+                  <RepositoriesSection repos={data.github.repositories} gh={gh} tk={tk} isMobile={isMobile} />
                 )}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 20, borderTop: `1px solid ${tk.border}`, marginTop: 8 }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: tk.text3, letterSpacing: "-0.02em" }}>DevIQ</span>
