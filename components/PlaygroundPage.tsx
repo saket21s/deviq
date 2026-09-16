@@ -889,6 +889,7 @@ export default function PlaygroundPage({
       // ~20s — far longer than a dead-backend connection failure, which
       // throws immediately. So a generous timeout only slows the
       // genuinely-slow case, never the dead-backend case.
+      pushT("sys", "compiling on live runner…");
       const slowHint = setTimeout(
         () => pushT("sys", "still starting… a cold backend can take ~20s to compile."),
         4000
