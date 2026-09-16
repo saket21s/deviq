@@ -883,13 +883,56 @@ export default function PlaygroundPage({
    */
   const startInteractive = useCallback(
     async (startedAt: number, boxLines: string[]): Promise<"session" | "handled" | null> => {
-      let res;
+      const startOnce = (timeoutMs: number) =>
+        postExec("/start", { language, code, filename }, timeoutMs);
+      // Cold production compiles (javac on a throttled container) can take
+      // ~20s — far longer than a dead-backend connection failure, which
+      // throws immediately. So a generous timeout only slows the
+      // genuinely-slow case, never the dead-backend case.
+      const slowHint = setTimeout(
+        () => pushT("sys", "still starting… a cold backend can take ~20s to compile."),
+        4000
+      );
+      let res: Awaited<ReturnType<typeof postExec>>;
       try {
-        res = await postExec("/start", { language, code, filename }, 9000);
-      } catch {
+        res = await startOnce(30000);
+      } catch (e) {
+        clearTimeout(slowHint);
+        pushT(
+          "sys",
+          `live start failed (${e instanceof Error ? e.message : "network error"}) — batch mode (pre-typed stdin only).`
+        );
         return null;
       }
-      if (!res.ok) return null;
+      clearTimeout(slowHint);
+      const backendDetail = (d: unknown): string => {
+        const o = (d ?? {}) as { error?: unknown; message?: unknown };
+        if (typeof o.error === "string" && o.error) return o.error;
+        if (typeof o.message === "string" && o.message) return o.message;
+        return `HTTP ${res.status}`;
+      };
+      // Busy / just-waking backends deserve one retry instead of an
+      // instant fallback — the retry usually lands on a warm backend.
+      if (!res.ok && (res.status === 429 || res.status === 502 || res.status === 503)) {
+        pushT("sys", `live runner busy (${backendDetail(res.data)}) — retrying once…`);
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          res = await startOnce(30000);
+        } catch (e) {
+          pushT(
+            "sys",
+            `live retry failed (${e instanceof Error ? e.message : "network error"}) — batch mode (pre-typed stdin only).`
+          );
+          return null;
+        }
+        if (!res.ok) {
+          pushT("sys", `live retry failed (${backendDetail(res.data)}) — batch mode (pre-typed stdin only).`);
+          return null;
+        }
+      } else if (!res.ok) {
+        pushT("sys", `live run failed (${backendDetail(res.data)}) — batch mode (pre-typed stdin only).`);
+        return null;
+      }
       const data = res.data as {
         session_id?: string;
         state?: string;
@@ -913,7 +956,13 @@ export default function PlaygroundPage({
         stopTimer();
         return "handled";
       }
-      if (data.state !== "running" || !data.session_id) return null;
+      if (data.state !== "running" || !data.session_id) {
+        pushT(
+          "sys",
+          `live runner replied "${data.state ?? "unknown"}" — batch mode (pre-typed stdin only).`
+        );
+        return null;
+      }
 
       const sid = data.session_id;
       sessionRef.current = { id: sid };
@@ -1125,7 +1174,8 @@ export default function PlaygroundPage({
       if (liveSupportsLang) {
         const mode = await startInteractive(startedAt, boxLines);
         if (mode !== null) return;
-        pushT("sys", "live run failed — batch mode (pre-typed stdin only).");
+        // startInteractive already printed the specific reason — fall through
+        // to the batch engines silently.
       } else if (!live) {
         pushT("sys", "live runner unreachable — batch mode (pre-typed stdin only).");
       }

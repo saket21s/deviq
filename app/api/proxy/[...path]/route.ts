@@ -27,8 +27,9 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
 
     // Bound the upstream wait: a sleeping backend should fail fast (502) so
     // the playground can fall back, instead of hanging the serverless fn.
+    // 45s covers cold production compiles (javac on a throttled container).
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 25000);
+    const t = setTimeout(() => ctrl.abort(), 45000);
     try {
       fetchOpts.signal = ctrl.signal;
       const r = await fetch(url, fetchOpts);
