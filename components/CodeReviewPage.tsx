@@ -55,6 +55,33 @@ export interface ReviewResult {
   /** True when the fixed program may have been cut off mid-file. */
   fixed_truncated?: boolean;
 }
+/* ── Time/Space optimization (improved-complexity rewrite) ── */
+export interface ComplexityPoint {
+  value: string;
+  explanation: string;
+}
+export interface QualityGain {
+  title: string;
+  detail: string;
+}
+export interface ImprovementArea {
+  area: string;
+  detail: string;
+  impact: string;
+}
+export interface OptimizationResult {
+  original_time: ComplexityPoint;
+  original_space: ComplexityPoint;
+  optimized_time: ComplexityPoint;
+  optimized_space: ComplexityPoint;
+  optimized_code: string | null;
+  techniques: string[];
+  /** How the rewrite improves overall code quality. */
+  quality_gains: QualityGain[];
+  /** Where the user can still improve. */
+  improvement_areas: ImprovementArea[];
+  optimized_truncated?: boolean;
+}
 interface StaticFinding {
   severity: "critical" | "high" | "medium" | "low";
   category: "Security" | "Bug risk" | "Quality";
@@ -982,6 +1009,154 @@ async function requestReview(
   }
 }
 
+/* ── Optimization fetching (primary /ai/optimize, fallback /ai/insights) ── */
+export function normalizeOptimization(parsed: Record<string, unknown>): OptimizationResult {
+  const asCx = (v: unknown): ComplexityPoint => {
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      return { value: String(o.value ?? o.complexity ?? "—"), explanation: String(o.explanation ?? o.why ?? o.reason ?? "") };
+    }
+    return { value: String(v ?? "—"), explanation: "" };
+  };
+  const asList = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+  const pick = (o: Record<string, unknown>, ...keys: string[]): unknown => {
+    for (const k of keys) {
+      const v = o[k];
+      if (v !== undefined && v !== null && v !== "") return v;
+    }
+    return undefined;
+  };
+  const quality_gains: QualityGain[] = asList(
+    parsed.quality_gains ?? parsed.qualityGains ?? parsed.gains
+  ).map((item) => {
+    if (item && typeof item === "object") {
+      const o = item as Record<string, unknown>;
+      return {
+        title: String(pick(o, "title", "name", "t") ?? "Improvement"),
+        detail: String(pick(o, "detail", "description", "message", "d") ?? ""),
+      };
+    }
+    return { title: "Improvement", detail: String(item) };
+  });
+  const improvement_areas: ImprovementArea[] = asList(
+    parsed.improvement_areas ?? parsed.improvementAreas ?? parsed.areas
+  ).map((item) => {
+    if (item && typeof item === "object") {
+      const o = item as Record<string, unknown>;
+      return {
+        area: String(pick(o, "area", "category", "aspect", "a") ?? "general"),
+        detail: String(pick(o, "detail", "feedback", "description", "message", "d") ?? ""),
+        impact: String(pick(o, "impact", "priority", "severity") ?? "MEDIUM").toUpperCase(),
+      };
+    }
+    return { area: "general", detail: String(item), impact: "MEDIUM" };
+  });
+  const techniques: string[] = asList(parsed.techniques).map((t) =>
+    typeof t === "string" ? t : JSON.stringify(t)
+  );
+  const codeRaw =
+    typeof parsed.optimized_code === "string"
+      ? parsed.optimized_code
+      : typeof parsed.fixed_code === "string"
+        ? parsed.fixed_code
+        : null;
+  return {
+    original_time: asCx(parsed.original_time ?? parsed.originalTime),
+    original_space: asCx(parsed.original_space ?? parsed.originalSpace),
+    optimized_time: asCx(parsed.optimized_time ?? parsed.optimizedTime),
+    optimized_space: asCx(parsed.optimized_space ?? parsed.optimizedSpace),
+    optimized_code: codeRaw,
+    techniques,
+    quality_gains,
+    improvement_areas,
+    optimized_truncated: parsed.optimized_truncated === true,
+  };
+}
+
+/* NOTE: /ai/insights has a tiny output budget (~500 tokens on older deploys),
+ * so the fallback is split in TWO small calls — analysis JSON (no code) plus
+ * plain optimized code. One giant JSON with the full file always arrives
+ * truncated, which is what produced the permanent "couldn't generate" error. */
+const OPTIMIZE_ANALYSIS_PROMPT = (language: string, ctx: string) =>
+  `You optimize ${language} code for time and space complexity. JSON ONLY, no fences, NO code: {"original_time":{"value":"e.g. O(n^2)","explanation":"why under 10 words"},"original_space":{"value":"e.g. O(n)","explanation":"why under 10 words"},"optimized_time":{"value":"e.g. O(n)","explanation":"what changed under 10 words"},"optimized_space":{"value":"e.g. O(1)","explanation":"what changed under 10 words"},"techniques":["technique + why, max 3"],"quality_gains":[{"title":"..","detail":"how quality improved, under 12 words"}],"improvement_areas":[{"area":"COMPLEXITY|STRUCTURE|READABILITY|PERFORMANCE|MEMORY|EDGE_CASES","detail":"what to improve next, under 12 words","impact":"HIGH|MEDIUM|LOW"}]} max 3 gains, max 3 areas, terse. ALWAYS close all brackets.\n\n${ctx}`;
+
+const OPTIMIZE_CODE_PROMPT = (language: string, ctx: string) =>
+  `Return ONLY the optimized ${language} version of the code below — no explanations, no markdown fences. Same behavior, better time/space complexity where possible (hash maps, memoization, two pointers, early exits). If already optimal, return it unchanged. Never truncate, never placeholders.\n\n${ctx}`;
+
+export async function requestOptimization(
+  code: string,
+  language: string
+): Promise<OptimizationResult> {
+  // Primary: dedicated structured endpoint.
+  try {
+    const r = await fetch(`${BACKEND}/ai/optimize`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ code, language }),
+    });
+    if (r.ok) {
+      const data = await r.json();
+      if (data && (data.optimized_code || data.status === "success" || data.status === "partial")) {
+        const norm = normalizeOptimization(data as Record<string, unknown>);
+        if (norm.optimized_code && !isCodeComplete(norm.optimized_code)) {
+          norm.optimized_truncated = true;
+        }
+        return norm;
+      }
+      throw new Error("Unexpected optimize response");
+    }
+    if (r.status === 404) throw new Error("OPTIMIZE_NOT_DEPLOYED");
+    throw new Error(`optimize endpoint ${r.status}`);
+  } catch (primaryErr) {
+    // Fallback: generic insights endpoint (older backend deploys without /ai/optimize).
+    if (primaryErr instanceof Error && /rate.?limit|at capacity/i.test(primaryErr.message)) throw primaryErr;
+    if (primaryErr instanceof TypeError) {
+      throw new Error("Could not reach the AI backend. Check your connection and try again.");
+    }
+    const ctx = `Language: ${language}\nCode:\n${code}`;
+    // 1) Analysis JSON (small — fits the insights token budget).
+    let analysis: Record<string, unknown> = {};
+    try {
+      const raw = await insightsCall(OPTIMIZE_ANALYSIS_PROMPT(language, ctx), 20, 3);
+      analysis = extractJson(stripFences(raw.trim()));
+    } catch (e) {
+      if (e instanceof Error && e.message === "RATE_LIMITED") {
+        throw new Error("DevIQ's AI is at capacity right now (rate limit). Wait a minute or two and try again.");
+      }
+      /* fall through — code call may still succeed */
+    }
+    // 2) Optimized code as plain text (no JSON wrapper to waste budget).
+    let optCode: string | null = null;
+    let truncated = false;
+    try {
+      const rawCode = await insightsCall(OPTIMIZE_CODE_PROMPT(language, ctx), 5, 2);
+      const stripped = stripFences(rawCode).slice(0, 6000);
+      if (stripped && stripped !== "NO_CHANGE" && stripped.length > 10) {
+        optCode = stripped;
+        truncated = !isCodeComplete(stripped);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message === "RATE_LIMITED") {
+        throw new Error("DevIQ's AI is at capacity right now (rate limit). Wait a minute or two and try again.");
+      }
+      /* fall through — analysis alone is still useful */
+    }
+    const merged: Record<string, unknown> = { ...analysis };
+    if (optCode) merged.optimized_code = optCode;
+    const norm = normalizeOptimization(merged);
+    if (optCode) norm.optimized_truncated = truncated;
+    const hasCx =
+      norm.original_time.value !== "—" ||
+      norm.optimized_time.value !== "—" ||
+      norm.original_space.value !== "—" ||
+      norm.optimized_space.value !== "—";
+    if (!optCode && !hasCx && norm.quality_gains.length === 0 && norm.improvement_areas.length === 0 && norm.techniques.length === 0) {
+      throw new Error("Couldn't generate an optimized version right now. Try again in a moment.");
+    }
+    return norm;
+  }
+}
+
 /* ── Small presentational helpers ── */
 function sevColor(sev: string, tk: PlaygroundTheme): { c: string; bg: string; b: string } {
   const s = (sev || "").toLowerCase();
@@ -1083,6 +1258,10 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
   const [elapsed, setElapsed] = useState(0);
   const [progress, setProgress] = useState<string | null>(null);
   const [fixedCopied, setFixedCopied] = useState(false);
+  const [optimization, setOptimization] = useState<OptimizationResult | null>(null);
+  const [optStatus, setOptStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [optError, setOptError] = useState<string | null>(null);
+  const [optCopied, setOptCopied] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -1122,6 +1301,9 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
     setStatus("loading");
     setError(null);
     setResult(null);
+    setOptimization(null);
+    setOptStatus("idle");
+    setOptError(null);
     setProgress(null);
     setElapsed(0);
     const t0 = Date.now();
@@ -1248,6 +1430,37 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
     }
   }, [code, language, regeneratingFix]);
 
+  const generateOptimization = useCallback(async () => {
+    if (optStatus === "loading" || !code.trim()) return;
+    setOptStatus("loading");
+    setOptError(null);
+    try {
+      const res = await requestOptimization(code, language);
+      setOptimization(res);
+      setOptStatus("success");
+    } catch (e) {
+      setOptError(e instanceof Error ? e.message : "Optimization failed. Try again.");
+      setOptStatus("error");
+    }
+  }, [code, language, optStatus]);
+
+  const copyOptimized = useCallback(async () => {
+    if (!optimization?.optimized_code) return;
+    try {
+      await navigator.clipboard.writeText(optimization.optimized_code);
+      setOptCopied(true);
+      setTimeout(() => setOptCopied(false), 1800);
+    } catch {
+      /* ignore */
+    }
+  }, [optimization]);
+
+  const useOptimized = useCallback(() => {
+    if (!optimization?.optimized_code) return;
+    setCode(optimization.optimized_code);
+    textareaRef.current?.focus();
+  }, [optimization]);
+
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ marginBottom: 20 }}>
@@ -1258,9 +1471,10 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
           Paste code. Get a senior-level review.
         </h1>
         <p style={{ fontSize: 14, color: tk.text2, lineHeight: 1.7, maxWidth: 640 }}>
-          DevIQ flags bugs, estimates time &amp; space complexity, catches security issues,
-          grades code quality, and suggests concrete fixes — plus instant static checks
-          as you type. Press{" "}
+          DevIQ flags bugs, estimates time &amp; space
+          complexity, generates an optimized rewrite with quality gains and areas to
+          improve, catches security issues, grades code quality, and suggests concrete
+          fixes — plus instant static checks as you type. Press{" "}
           <kbd style={{ fontFamily: "monospace", fontSize: 12, background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 5, padding: "1px 6px" }}>
             Ctrl + Enter
           </kbd>{" "}
@@ -1287,7 +1501,7 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
           <button onClick={insertSample} style={{ padding: "7px 13px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text2, fontSize: 12, fontWeight: 500, cursor: "pointer" }}>
             Try a sample
           </button>
-          <button onClick={() => { setCode(""); setResult(null); setError(null); setStatus("idle"); }} style={{ padding: "7px 13px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text2, fontSize: 12, fontWeight: 500, cursor: "pointer" }}>
+          <button onClick={() => { setCode(""); setResult(null); setOptimization(null); setOptStatus("idle"); setOptError(null); setError(null); setStatus("idle"); }} style={{ padding: "7px 13px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text2, fontSize: 12, fontWeight: 500, cursor: "pointer" }}>
             Clear
           </button>
           <button
@@ -1301,12 +1515,16 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
         <div style={{ display: "flex", minHeight: 300 }}>
           <div
             ref={gutterRef}
-            aria-hidden
             style={{ width: 52, flexShrink: 0, overflow: "hidden", background: tk.bgAlt, borderRight: `1px solid ${tk.border}`, padding: "14px 8px 14px 0", textAlign: "right", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: 13, lineHeight: 1.65, color: tk.text3, userSelect: "none" }}
           >
-            {Array.from({ length: lineCount }, (_, i) => (
-              <div key={i + 1}>{i + 1}</div>
-            ))}
+            {Array.from({ length: lineCount }, (_, i) => {
+              const n = i + 1;
+              return (
+                <div key={n} style={{ padding: "0 4px" }}>
+                  {n}
+                </div>
+              );
+            })}
           </div>
           <textarea
             ref={textareaRef}
@@ -1411,6 +1629,172 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
                 )}
               </div>
             ))}
+          </div>
+
+          {/* Optimized Time & Space — improved-complexity rewrite + quality gains */}
+          <div style={{ background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 10, overflow: "hidden", boxShadow: tk.shadow }}>
+            <div style={{ padding: "11px 16px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: tk.purple, flexShrink: 0 }} />
+              <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", color: tk.text }}>
+                Optimized time &amp; space
+              </span>
+              {optimization && optStatus === "success" && (
+                <span style={{ fontSize: 11, fontWeight: 600, color: tk.text3, background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 20, padding: "1px 8px" }}>
+                  {optimization.quality_gains.length + optimization.improvement_areas.length} insights
+                </span>
+              )}
+              <div style={{ flex: 1 }} />
+              {(!optimization || optStatus !== "success") && (
+                <button
+                  onClick={() => void generateOptimization()}
+                  disabled={optStatus === "loading"}
+                  style={{ padding: "7px 16px", borderRadius: 8, border: "none", background: optStatus === "loading" ? tk.track : tk.purple, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: optStatus === "loading" ? "wait" : "pointer", opacity: optStatus === "loading" ? 0.7 : 1 }}
+                >
+                  {optStatus === "loading" ? "Optimizing…" : "Optimize time & space"}
+                </button>
+              )}
+              {optimization && optStatus === "success" && (
+                <>
+                  <button onClick={copyOptimized} style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text2, fontSize: 12, fontWeight: 500, cursor: "pointer" }}>
+                    {optCopied ? "Copied ✓" : "Copy"}
+                  </button>
+                  <button onClick={useOptimized} style={{ padding: "6px 12px", borderRadius: 7, border: "none", background: tk.accent, color: tk.accentFg, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                    Load into editor
+                  </button>
+                  <button onClick={() => void generateOptimization()} style={{ padding: "6px 12px", borderRadius: 7, border: `1px solid ${tk.border}`, background: "transparent", color: tk.text3, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                    ↻ Regenerate
+                  </button>
+                </>
+              )}
+            </div>
+            <div style={{ padding: "12px 16px" }}>
+              {optStatus === "loading" && (
+                <div style={{ fontSize: 13, color: tk.text3, lineHeight: 1.6 }}>
+                  Analyzing bottlenecks and rewriting for better time &amp; space complexity…
+                  <div style={{ height: 3, borderRadius: 3, background: tk.track, overflow: "hidden", marginTop: 10 }}>
+                    <div style={{ height: "100%", width: "40%", borderRadius: 3, background: tk.purple, animation: "deviq-slide 1s ease-in-out infinite alternate" }} />
+                  </div>
+                </div>
+              )}
+              {optStatus === "error" && optError && (
+                <div style={{ background: tk.roseLight, border: `1px solid ${tk.roseBorder}`, borderRadius: 8, padding: "10px 12px", color: tk.rose, fontSize: 13, lineHeight: 1.6 }}>
+                  {optError}{" "}
+                  <button onClick={() => void generateOptimization()} style={{ marginLeft: 6, padding: "4px 12px", borderRadius: 6, border: `1px solid ${tk.roseBorder}`, background: "transparent", color: tk.rose, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    Try again
+                  </button>
+                </div>
+              )}
+              {optStatus === "idle" && !optimization && (
+                <div style={{ fontSize: 13, color: tk.text2, lineHeight: 1.7 }}>
+                  Get an <strong style={{ color: tk.text }}>optimized rewrite</strong> of your code with better
+                  time &amp; space complexity — plus <strong style={{ color: tk.text }}>quality gains</strong> and{" "}
+                  <strong style={{ color: tk.text }}>areas to improve</strong>. Your current complexity is shown above;
+                  press the button to see the before → after comparison and the improved code.
+                </div>
+              )}
+              {optimization && optStatus === "success" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {/* Before → After complexity */}
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+                    {[
+                      { label: "Time", before: optimization.original_time, after: optimization.optimized_time },
+                      { label: "Space", before: optimization.original_space, after: optimization.optimized_space },
+                    ].map((row) => (
+                      <div key={row.label} style={{ background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 8, padding: "10px 12px" }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: tk.text3, marginBottom: 8 }}>{row.label} complexity</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: tk.text2, background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 6, padding: "3px 10px" }}>
+                            {row.before.value}
+                          </span>
+                          <span style={{ color: tk.purple, fontWeight: 700 }}>→</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, monospace", color: tk.purple, background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 6, padding: "3px 10px" }}>
+                            {row.after.value}
+                          </span>
+                          {row.before.value !== "—" && row.after.value !== "—" && row.before.value === row.after.value && (
+                            <span style={{ fontSize: 11, color: tk.text3 }}>(already optimal)</span>
+                          )}
+                        </div>
+                        {(row.before.explanation || row.after.explanation) && (
+                          <div style={{ fontSize: 12, color: tk.text2, lineHeight: 1.6, marginTop: 6 }}>
+                            {row.after.explanation || row.before.explanation}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Techniques */}
+                  {optimization.techniques.length > 0 && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {optimization.techniques.map((t, i) => (
+                        <span key={i} style={{ fontSize: 11.5, fontWeight: 600, color: tk.purple, background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 20, padding: "3px 11px" }}>
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* Optimized code */}
+                  {optimization.optimized_code ? (
+                    <div>
+                      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: tk.text3, marginBottom: 6 }}>Improved code</div>
+                      {optimization.optimized_truncated && (
+                        <div style={{ background: tk.amberLight, border: `1px solid ${tk.amberBorder}`, borderRadius: 6, padding: "8px 10px", fontSize: 12, color: tk.amber, marginBottom: 8 }}>
+                          This looks cut off at the end — press Regenerate for the complete version.
+                        </div>
+                      )}
+                      <pre style={{ margin: 0, padding: "12px 14px", fontSize: 12.5, lineHeight: 1.65, color: tk.text, background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 8, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", maxHeight: 360, overflowY: "auto" }}>
+                        {optimization.optimized_code}
+                      </pre>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: tk.text2, lineHeight: 1.6 }}>Your code is already optimal — no rewrite needed.</div>
+                  )}
+                  {/* Quality gains */}
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: tk.green, marginBottom: 6 }}>
+                      Quality improvements ({optimization.quality_gains.length})
+                    </div>
+                    {optimization.quality_gains.length === 0 ? (
+                      <div style={{ fontSize: 12.5, color: tk.text3 }}>No extra quality notes.</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {optimization.quality_gains.map((g, i) => (
+                          <div key={i} style={{ background: tk.greenLight, border: `1px solid ${tk.greenBorder}`, borderRadius: 8, padding: "8px 12px" }}>
+                            <div style={{ fontSize: 12.5, fontWeight: 700, color: tk.green }}>✓ {g.title}</div>
+                            {g.detail && <div style={{ fontSize: 12.5, color: tk.text2, lineHeight: 1.6, marginTop: 2 }}>{g.detail}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {/* Areas to improve */}
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: tk.amber, marginBottom: 6 }}>
+                      Areas to improve ({optimization.improvement_areas.length})
+                    </div>
+                    {optimization.improvement_areas.length === 0 ? (
+                      <div style={{ fontSize: 12.5, color: tk.text3 }}>Nothing left — clean code.</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {optimization.improvement_areas.map((a, i) => {
+                          const s = sevColor(a.impact === "HIGH" ? "high" : a.impact === "LOW" ? "low" : "medium", tk);
+                          return (
+                            <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 8, padding: "8px 12px" }}>
+                              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: s.c, background: s.bg, border: `1px solid ${s.b}`, borderRadius: 20, padding: "2px 8px", flexShrink: 0, marginTop: 1 }}>
+                                {a.impact || "MEDIUM"}
+                              </span>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: tk.text, textTransform: "uppercase", letterSpacing: "0.03em" }}>{a.area || "general"}</div>
+                                <div style={{ fontSize: 12.5, color: tk.text2, lineHeight: 1.6, marginTop: 2 }}>{a.detail}</div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Bugs — definite errors only */}
