@@ -96,7 +96,7 @@ async function getCompilers(): Promise<CompilerInfo[]> {
     return compilerCache.list;
   }
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 15000);
+  const t = setTimeout(() => ctrl.abort(), 8000);
   try {
     const r = await fetch(`${GODBOLT}/api/compilers`, {
       headers: { Accept: "application/json", "User-Agent": HEADERS["User-Agent"] },
@@ -149,7 +149,7 @@ async function executeOnGodbolt(
 }> {
   const t0 = Date.now();
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 100000);
+  const t = setTimeout(() => ctrl.abort(), 30000);
   try {
     const r = await fetch(`${GODBOLT}/api/compiler/${compilerId}/compile`, {
       method: "POST",

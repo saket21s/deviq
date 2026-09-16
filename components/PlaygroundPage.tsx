@@ -682,7 +682,7 @@ export default function PlaygroundPage({
   /* ── Live runner session (interactive backend) ── */
 
   const checkRunner = useCallback(
-    async (timeoutMs = 5000): Promise<boolean> => {
+    async (timeoutMs = 4000): Promise<boolean> => {
       const fetchLangs = async (url: string) => {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -699,26 +699,27 @@ export default function PlaygroundPage({
           const langs = Object.keys(supported).filter((k) => supported[k]);
           // Empty langs with ok:true is ambiguous (proxy returned html 200) — treat as failure so direct is tried
           if (langs.length === 0 && Object.keys(supported).length === 0) throw new Error("empty supported");
-          const info = { ok: true, langs, at: Date.now() };
-          setRunner(info);
-          runnerRef.current = info;
-          return true;
+          return { ok: true, langs, at: Date.now() };
         } finally {
           clearTimeout(t);
         }
       };
-      // Try direct first — proxy on Vercel/GH Pages can return 200 HTML for /api/proxy
+      // Race direct vs proxy — first valid answer wins. Both hit the same
+      // backend, so this is read-only and safe to run in parallel. It cuts
+      // the worst case from (direct timeout + proxy timeout) to one timeout.
       try {
-        return await fetchLangs(`${BACKEND_BASE}/exec/languages`);
+        const info = await Promise.any([
+          fetchLangs(`${BACKEND_BASE}/exec/languages`),
+          fetchLangs("/api/proxy/exec/languages"),
+        ]);
+        setRunner(info);
+        runnerRef.current = info;
+        return true;
       } catch {
-        try {
-          return await fetchLangs("/api/proxy/exec/languages");
-        } catch {
-          const info = { ok: false, langs: [] as string[], at: Date.now() };
-          setRunner(info);
-          runnerRef.current = info;
-          return false;
-        }
+        const info = { ok: false, langs: [] as string[], at: Date.now() };
+        setRunner(info);
+        runnerRef.current = info;
+        return false;
       }
     },
     []
@@ -729,11 +730,52 @@ export default function PlaygroundPage({
     runnerRef.current = runner;
   }, [runner]);
 
-  // Probe the runner on mount so the header dot reflects reality.
+  // Warm everything on mount so Run feels instant:
+  //  - ping the backend to wake it from Render sleep (long timeout, background)
+  //  - probe the runner so the header dot reflects reality
+  //  - warm the cloud-sandbox compiler cache on the server
+  //  - keep the backend warm while the page stays open (sleeps after ~15m idle)
   useEffect(() => {
-    void checkRunner();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 55000);
+        await fetch(`${BACKEND_BASE}/health`, {
+          signal: ctrl.signal,
+          mode: "cors",
+        }).catch(() => null);
+        clearTimeout(t);
+      } catch {
+        /* wake-up is best-effort; the run path has its own fallbacks */
+      }
+      if (!cancelled) void checkRunner(6000);
+    })();
+    // Best-effort warm of the server-side Godbolt compiler list (1h cache).
+    fetch("/api/playground").catch(() => null);
+    const keepAlive = setInterval(() => {
+      fetch(`${BACKEND_BASE}/health`, { mode: "cors" }).catch(() => null);
+    }, 8 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(keepAlive);
+    };
   }, [checkRunner]);
 
+  // Preload the in-browser Python runtime as soon as Python is selected, so
+  // the ~10MB one-time download happens while the user is still typing —
+  // not after they hit Run. Silent: failures surface at Run time as usual.
+  useEffect(() => {
+    if (language !== "python") return;
+    const t = setTimeout(() => {
+      loadPyodideOnce(() => {}).catch(() => null);
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [language]);
+
+  // NOTE: stateful POSTs (/start, /input) go to exactly ONE path — racing
+  // them would create two backend sessions / deliver input twice. Direct
+  // first (one fewer hop, no serverless cold start), proxy as fallback.
   const postExec = useCallback(async (path: string, body: unknown, timeoutMs: number) => {
     const doFetch = async (base: string) => {
       const ctrl = new AbortController();
@@ -756,20 +798,19 @@ export default function PlaygroundPage({
         clearTimeout(t);
       }
     };
-    // Direct first — Vercel proxy can return HTML 200 and look like success
+    let lastErr: unknown = null;
     try {
       return await doFetch(BACKEND_BASE);
-    } catch {
-      /* fallback to proxy */
+    } catch (e) {
+      lastErr = e;
     }
     try {
       const viaProxy = await doFetch("/api/proxy");
       if (viaProxy.status !== 404 && (viaProxy as { ct: string }).ct?.includes("application/json")) return viaProxy;
       if (viaProxy.status !== 404 && viaProxy.ok && Object.keys(viaProxy.data).length === 0) throw new Error("empty proxy");
       return viaProxy;
-    } catch {
-      // both failed — re-throw direct error by retrying direct
-      return doFetch(BACKEND_BASE);
+    } catch (e) {
+      throw lastErr ?? e;
     }
   }, []);
 
@@ -844,7 +885,7 @@ export default function PlaygroundPage({
     async (startedAt: number, boxLines: string[]): Promise<"session" | "handled" | null> => {
       let res;
       try {
-        res = await postExec("/start", { language, code, filename }, 12000);
+        res = await postExec("/start", { language, code, filename }, 9000);
       } catch {
         return null;
       }
@@ -892,15 +933,14 @@ export default function PlaygroundPage({
       // INPUT box lines go in first, then lines typed in the terminal.
       // (Piped stdin isn't echoed — like `< input.txt` in a real shell;
       // only keystrokes typed live in the terminal echo.)
+      // Sent in parallel: sequential awaits cost one round-trip per line.
       const pre = [...boxLines, ...queueRef.current];
       queueRef.current = [];
-      for (const line of pre) {
-        try {
-          await postExec("/input", { session_id: sid, line }, 5000);
-        } catch {
-          /* poll loop surfaces runner problems */
-        }
-      }
+      await Promise.all(
+        pre.map((line) =>
+          postExec("/input", { session_id: sid, line }, 4000).catch(() => null)
+        )
+      );
       if (boxLines.length > 0)
         pushT("sys", `${boxLines.length} stdin line(s) piped from INPUT box — type below to interact live.`);
       const pollOnce = async () => {
@@ -920,24 +960,32 @@ export default function PlaygroundPage({
         try {
           const { so, se } = offRef.current;
           const tryPoll = async (base: string) => {
-            const url =
-              base === "/api/proxy"
-                ? `${base}/exec/poll/${sid}?so=${so}&se=${se}`
-                : `${base}/exec/poll/${sid}?so=${so}&se=${se}`;
-            const resp = await fetch(url, {
-              ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
-            });
-            const ct = resp.headers.get("content-type") || "";
-            if (!ct.includes("application/json") && resp.ok) throw new Error("poll html");
-            const body = await resp.json().catch(() => ({}));
-            if (!resp.ok) throw new Error(body?.error || `poll failed (${resp.status})`);
-            return body;
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), 8000);
+            try {
+              const url =
+                base === "/api/proxy"
+                  ? `${base}/exec/poll/${sid}?so=${so}&se=${se}`
+                  : `${base}/exec/poll/${sid}?so=${so}&se=${se}`;
+              const resp = await fetch(url, {
+                signal: ctrl.signal,
+                ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
+              });
+              const ct = resp.headers.get("content-type") || "";
+              if (!ct.includes("application/json") && resp.ok) throw new Error("poll html");
+              const body = await resp.json().catch(() => ({}));
+              if (!resp.ok) throw new Error(body?.error || `poll failed (${resp.status})`);
+              return body;
+            } finally {
+              clearTimeout(t);
+            }
           };
-          // Direct first — proxy can return HTML 200 and hide stdout
+          // Poll is read-only (offset-based) — race both paths so a slow
+          // route never stalls the live output stream.
           try {
-            r = await tryPoll(BACKEND_BASE);
+            r = await Promise.any([tryPoll(BACKEND_BASE), tryPoll("/api/proxy")]);
           } catch {
-            r = await tryPoll("/api/proxy");
+            throw new Error("Lost connection to the runner.");
           }
         } catch (e) {
           if (sessionRef.current?.id !== sid) return;
@@ -1055,19 +1103,18 @@ export default function PlaygroundPage({
     const startedAt = Date.now();
 
     // Live interactive process first (true mid-run input, prompts included).
-    // The runner check is cached 60s so a dead backend fails fast instead of
-    // hanging every run; without it we fall to batch engines, which get the
-    // INPUT box + queued terminal lines as stdin.
+    // Never block Run on a runner probe: use the cached state, refresh it
+    // in the background, and try the live session optimistically — /start
+    // itself fails fast when the backend is down or lacks the toolchain.
+    // When the backend is known-offline (fresh check), skip it entirely and
+    // go straight to the in-browser / cloud engines instead of timing out.
+    const cachedRunner = runnerRef.current ?? runner;
+    if (!cachedRunner || Date.now() - cachedRunner.at > 60000) void checkRunner(4000);
+    const backendOffline =
+      !!cachedRunner && Date.now() - cachedRunner.at < 60000 && !cachedRunner.ok;
     if (language !== "javascript") {
-      let live: boolean;
-      let cur = runnerRef.current ?? runner;
-      if (cur && Date.now() - cur.at < 60000) {
-        live = cur.ok;
-      } else {
-        pushT("sys", "checking live runner…");
-        live = await checkRunner(7000);
-        cur = runnerRef.current;
-      }
+      const cur = cachedRunner;
+      const live = !backendOffline;
       const liveSupportsLang = live && (cur?.langs.includes(language) ?? true);
       // If the runner is reachable but reports no toolchain for this language,
       // tell the user exactly that instead of a generic "unreachable".
@@ -1137,12 +1184,15 @@ export default function PlaygroundPage({
     // Backend batch engine (POST /execute): authoritative routing by the
     // `language` field, stdin via write+close. Returns null when the backend
     // can't serve it so the caller falls back to the cloud sandbox.
-    // Tries the Next.js proxy first, then direct BACKEND_BASE (for static GH Pages).
+    // Skipped outright when the backend is known-offline — no point waiting
+    // out two timeouts for an answer we already have. Direct first (one
+    // fewer hop), proxy as fallback.
     const runBatchBackend = async (stdinStr: string): Promise<RunResult | null> => {
+      if (backendOffline) return null;
       const tryBackend = async (base: string, path: string): Promise<RunResult | null> => {
         try {
           const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 45000);
+          const t = setTimeout(() => ctrl.abort(), 22000);
           let r: Response;
           let data: {
             success?: boolean; stdout?: string; stderr?: string;
@@ -1195,15 +1245,22 @@ export default function PlaygroundPage({
     // batch (already tried) — final fallback is the cloud sandbox.
     const runRemote = async (stdinStr: string) => {
       const tryPlayground = async (url: string, opts?: RequestInit) => {
-        const r = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ language, code, stdin: stdinStr, filename }),
-          ...(opts || {}),
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(data?.error || `Execution failed (${r.status})`);
-        return data as RunResult;
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 30000);
+        try {
+          const r = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ language, code, stdin: stdinStr, filename }),
+            signal: ctrl.signal,
+            ...(opts || {}),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data?.error || `Execution failed (${r.status})`);
+          return data as RunResult;
+        } finally {
+          clearTimeout(t);
+        }
       };
       try {
         return await tryPlayground("/api/playground");

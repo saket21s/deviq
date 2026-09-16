@@ -25,16 +25,25 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
       fetchOpts.body = await req.text();
     }
 
-    const r = await fetch(url, fetchOpts);
-    const text = await r.text();
+    // Bound the upstream wait: a sleeping backend should fail fast (502) so
+    // the playground can fall back, instead of hanging the serverless fn.
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 25000);
+    try {
+      fetchOpts.signal = ctrl.signal;
+      const r = await fetch(url, fetchOpts);
+      const text = await r.text();
 
-    if (r.headers.get("content-type")?.includes("json") && text.startsWith("{")) {
-      return NextResponse.json(JSON.parse(text), { status: r.status });
+      if (r.headers.get("content-type")?.includes("json") && text.startsWith("{")) {
+        return NextResponse.json(JSON.parse(text), { status: r.status });
+      }
+      return NextResponse.json(
+        { error: "upstream returned non-json", status: r.status, body: text.slice(0, 200) },
+        { status: 502 },
+      );
+    } finally {
+      clearTimeout(t);
     }
-    return NextResponse.json(
-      { error: "upstream returned non-json", status: r.status, body: text.slice(0, 200) },
-      { status: 502 },
-    );
   } catch (e) {
     return NextResponse.json(
       { error: `proxy error: ${e instanceof Error ? e.message : String(e)}` },
