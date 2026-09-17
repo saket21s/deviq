@@ -1789,7 +1789,24 @@ function buildGrid(contributions: Contribution[]) {
   return { weeks, monthLabels };
 }
 
+/* Friendly one-liner for contribution failures — never show raw API dumps. */
+function friendlyContributionError(msg: string, username: string): string {
+  const m = (msg || "").toLowerCase();
+  if (m.includes("not_found") || m.includes("could not resolve") || m.includes("not found")) {
+    return `GitHub user "${username}" doesn't exist. Check the spelling — your GitHub username may differ from your email handle.`;
+  }
+  if (m.includes("rate limit") || m.includes("429")) {
+    return "GitHub rate limit hit — wait a minute, then re-run the analysis.";
+  }
+  if (m.includes("token") && m.includes("config")) {
+    return "Contribution service is temporarily unavailable — try again later.";
+  }
+  const clean = (msg || "Couldn't load contributions.").replace(/\s+/g, " ").trim();
+  return clean.length > 160 ? clean.slice(0, 160) + "…" : clean;
+}
+
 function ContributionHeatmap({ username, tk, dark }: { username: string; tk: Theme; dark: boolean }) {
+
   const [hdata, setHdata] = useState<HeatmapData | null>(null);
   const [loading, setLoading] = useState(false);
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -1853,7 +1870,7 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
       <SectionHeader label="Contribution Activity" tk={tk} right={hdata && !hdata.error ? (<div style={{ display: "flex", gap: 20 }}>{[{ v: hdata.total_last_year, l: "Contributions" }, { v: `${hdata.current_streak}d`, l: "Streak" }, { v: `${hdata.longest_streak}d`, l: "Longest" }].map(s => (<div key={s.l} style={{ textAlign: "right" }}><div style={{ fontSize: 13, fontWeight: 600, color: tk.text, letterSpacing: "-0.02em", fontVariantNumeric: "tabular-nums" }}>{s.v}</div><div style={{ fontSize: 10, color: tk.text3, marginTop: 1 }}>{s.l}</div></div>))}</div>) : undefined} />
       <div style={{ padding: "14px 18px 12px" }}>
         {loading && <div style={{ padding: "24px 0", textAlign: "center", color: tk.text3, fontSize: 14 }}>Loading…</div>}
-        {hdata?.error && <div style={{ padding: "16px 0", color: tk.rose, fontSize: 14 }}>Error: {hdata.error}</div>}
+        {hdata?.error && <div style={{ padding: "16px 0", color: tk.rose, fontSize: 14, lineHeight: 1.6 }}>{friendlyContributionError(hdata.error, username)}</div>}
         {weeks.length > 0 && (
           <div style={{ overflowX: "auto" }}>
             <div style={{ display: "inline-block" }}>
