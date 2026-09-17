@@ -7,7 +7,15 @@ const SPA_ROUTES = new Set([
 ]);
 
 export function middleware(request: NextRequest) {
-  const segment = request.nextUrl.pathname.split('/')[1];
+  const pathname = request.nextUrl.pathname;
+  const segment = pathname.split('/')[1];
+
+  // Auth callback pages are transient OAuth handlers — never index them.
+  if (segment === 'auth') {
+    const res = NextResponse.next();
+    res.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    return res;
+  }
 
   // If it's an SPA route, rewrite to the root page so page.tsx handles it
   if (SPA_ROUTES.has(segment)) {

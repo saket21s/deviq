@@ -1,5 +1,14 @@
 User-agent: *
 Allow: /
+Disallow: /api/
 Disallow: /auth/
+Disallow: /profile
+Disallow: /settings
+Disallow: /history
+Disallow: /following
+Disallow: /chat
+Disallow: /practice
+Disallow: /compare
+Disallow: /analyze
 
 Sitemap: https://deviq.online/sitemap.xml
