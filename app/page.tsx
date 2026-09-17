@@ -3461,6 +3461,168 @@ function HistoryPage({ user, profile, tk, isMobile, onNavigate }: { user: AuthUs
 }
 
 /* ─────────────────────────────────────────────────
+   CHAT MARKDOWN — lightweight renderer (no new deps)
+   Renders headings, bold, code, tables, lists, links
+   so AI replies look clean instead of a text wall.
+───────────────────────────────────────────────── */
+function ChatInline({ text, tk }: { text: string; tk: Theme }) {
+  const parts = text.split(/(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]]+\]\(https?:[^)\s]+\)|\*[^*\n]+\*)/g);
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (p.startsWith("**") && p.endsWith("**") && p.length > 4)
+          return <strong key={i} style={{ fontWeight: 700, color: tk.text }}>{p.slice(2, -2)}</strong>;
+        if (p.startsWith("`") && p.endsWith("`") && p.length > 2)
+          return <code key={i} style={{ fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", fontSize: "0.86em", background: tk.bgAlt, border: `1px solid ${tk.border}`, borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}>{p.slice(1, -1)}</code>;
+        const lm = p.match(/^\[([^\]]+)\]\((https?:[^)\s]+)\)$/);
+        if (lm) return <a key={i} href={lm[2]} target="_blank" rel="noopener noreferrer" style={{ color: tk.blue }}>{lm[1]}</a>;
+        if (p.startsWith("*") && p.endsWith("*") && p.length > 2 && !p.includes(" "))
+          return <em key={i}>{p.slice(1, -1)}</em>;
+        if (p.startsWith("*") && p.endsWith("*") && p.length > 2)
+          return <em key={i}>{p.slice(1, -1)}</em>;
+        return <span key={i}>{p}</span>;
+      })}
+    </>
+  );
+}
+
+function ChatCodeBlock({ code, lang, tk }: { code: string; lang: string; tk: Theme }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { }
+  };
+  return (
+    <div style={{ margin: "10px 0", borderRadius: 8, overflow: "hidden", border: `1px solid ${tk.border}` }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 12px", background: tk.bgAlt }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: tk.text3, textTransform: "uppercase", letterSpacing: "0.05em" }}>{lang || "code"}</span>
+        <button onClick={copy} style={{ fontSize: 11, fontWeight: 600, color: copied ? tk.green : tk.text3, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>{copied ? "✓ Copied" : "Copy"}</button>
+      </div>
+      <pre style={{ margin: 0, padding: "12px 14px", background: tk.bg, overflowX: "auto", fontSize: 12.5, lineHeight: 1.6, fontFamily: "ui-monospace,SFMono-Regular,Menlo,monospace", color: tk.text, whiteSpace: "pre" }}>{code}</pre>
+    </div>
+  );
+}
+
+function ChatTable({ rows, tk }: { rows: string[][]; tk: Theme }) {
+  if (rows.length === 0) return null;
+  const [head, ...body] = rows;
+  return (
+    <div style={{ overflowX: "auto", margin: "10px 0", border: `1px solid ${tk.border}`, borderRadius: 8 }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: tk.bgAlt }}>
+            {head.map((c, i) => (
+              <th key={i} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 700, color: tk.text, borderBottom: `1px solid ${tk.border}`, whiteSpace: "nowrap" }}><ChatInline text={c} tk={tk} /></th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((r, ri) => (
+            <tr key={ri} style={{ background: ri % 2 === 1 ? tk.bgAlt : "transparent" }}>
+              {r.map((c, ci) => (
+                <td key={ci} style={{ padding: "8px 12px", color: tk.text2, borderBottom: ri < body.length - 1 ? `1px solid ${tk.border}` : "none", verticalAlign: "top", minWidth: 90 }}><ChatInline text={c} tk={tk} /></td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ChatMarkdown({ text, tk }: { text: string; tk: Theme }) {
+  const blocks = useMemo(() => {
+    // Split out fenced code blocks first so markdown inside them is untouched.
+    const out: { type: "code" | "md"; lang?: string; content: string }[] = [];
+    const re = /```(\w*)\n?([\s\S]*?)(?:```|$)/g;
+    let last = 0; let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) out.push({ type: "md", content: text.slice(last, m.index) });
+      out.push({ type: "code", lang: m[1] || "", content: m[2].replace(/\n$/, "") });
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push({ type: "md", content: text.slice(last) });
+    if (out.length === 0) out.push({ type: "md", content: text });
+    return out;
+  }, [text]);
+
+  const renderMd = (content: string, keyPrefix: string) => {
+    const lines = content.split("\n");
+    const els: ReactNode[] = [];
+    let i = 0;
+    const isTableSep = (l: string) => /^\|?[\s:|-]+\|?[\s:|.-]*$/.test(l.trim()) && l.includes("-");
+    while (i < lines.length) {
+      const line = lines[i];
+      const t = line.trim();
+      if (!t) { els.push(<div key={`${keyPrefix}-${i}`} style={{ height: 8 }} />); i++; continue; }
+      // Headings
+      const h = t.match(/^(#{1,4})\s+(.*)$/);
+      if (h) {
+        const level = h[1].length;
+        els.push(
+          <div key={`${keyPrefix}-${i}`} style={{ fontWeight: 700, color: tk.text, fontSize: level <= 2 ? 15 : 14, margin: i === 0 ? "0 0 8px" : "14px 0 8px", letterSpacing: "-0.01em" }}>
+            <ChatInline text={h[2]} tk={tk} />
+          </div>
+        );
+        i++; continue;
+      }
+      // Tables: header + separator + rows
+      if (t.includes("|") && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+        const splitRow = (l: string) => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim().replace(/\*\*/g, ""));
+        const rows: string[][] = [splitRow(t)];
+        i += 2;
+        while (i < lines.length && lines[i].includes("|") && lines[i].trim()) { rows.push(splitRow(lines[i])); i++; }
+        els.push(<ChatTable key={`${keyPrefix}-${i}`} rows={rows} tk={tk} />);
+        continue;
+      }
+      // Bullets
+      if (/^([-*•]\s+|\d+[.)]\s+)/.test(t)) {
+        const items: { ordered: boolean; num?: string; text: string }[] = [];
+        while (i < lines.length && /^([-*•]\s+|\d+[.)]\s+)/.test(lines[i].trim())) {
+          const lt = lines[i].trim();
+          const om = lt.match(/^(\d+)[.)]\s+(.*)$/);
+          if (om) items.push({ ordered: true, num: om[1], text: om[2] });
+          else items.push({ ordered: false, text: lt.replace(/^[-*•]\s+/, "") });
+          i++;
+        }
+        els.push(
+          <div key={`${keyPrefix}-${i}`} style={{ display: "flex", flexDirection: "column", gap: 6, margin: "8px 0" }}>
+            {items.map((it, k) => (
+              <div key={k} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                {it.ordered
+                  ? <span style={{ fontSize: 12.5, fontWeight: 700, color: tk.blue, minWidth: 18, textAlign: "right", marginTop: 1 }}>{it.num}.</span>
+                  : <span style={{ color: tk.blue, flexShrink: 0, marginTop: 1, fontSize: 13 }}>•</span>}
+                <span style={{ color: tk.text2, lineHeight: 1.65, fontSize: 13.5 }}><ChatInline text={it.text} tk={tk} /></span>
+              </div>
+            ))}
+          </div>
+        );
+        continue;
+      }
+      // Quote
+      if (t.startsWith(">")) {
+        els.push(
+          <div key={`${keyPrefix}-${i}`} style={{ borderLeft: `3px solid ${tk.blue}`, paddingLeft: 12, margin: "8px 0", color: tk.text2, fontStyle: "italic", fontSize: 13.5 }}>
+            <ChatInline text={t.replace(/^>\s?/, "")} tk={tk} />
+          </div>
+        );
+        i++; continue;
+      }
+      els.push(<p key={`${keyPrefix}-${i}`} style={{ color: tk.text2, lineHeight: 1.7, margin: "0 0 8px", fontSize: 13.5 }}><ChatInline text={t} tk={tk} /></p>);
+      i++;
+    }
+    return els;
+  };
+
+  return (
+    <div style={{ overflowWrap: "anywhere" }}>
+      {blocks.map((b, bi) => b.type === "code"
+        ? <ChatCodeBlock key={bi} code={b.content} lang={b.lang || ""} tk={tk} />
+        : <div key={bi}>{renderMd(b.content, `b${bi}`)}</div>)}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────
    CHAT PAGE
 ───────────────────────────────────────────────── */
 interface ChatMessage {
@@ -3473,17 +3635,23 @@ interface ChatMessage {
 function ChatPage({ user, profile, tk, isMobile }: {
   user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean;
 }) {
+  const welcomeText = `Hello ${user.name}! I'm your DevIQ coach. I can see your analysis history and scores — ask me anything about your progress, weak areas, or what to do next.`;
   const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content: `Hello ${user.name}! I'm your AI assistant. I can help you understand your developer profile, analyze your coding skills, and answer questions about your progress. What would you like to know?`,
-      timestamp: new Date()
-    }
+    { id: "welcome", role: "assistant", content: welcomeText, timestamp: new Date() }
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const CHAT_SUGGESTIONS = [
+    "Summarize my progress",
+    "What are my weak areas?",
+    "Give me a focused 7-day plan",
+    "Am I interview ready?",
+  ];
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -3491,68 +3659,76 @@ function ChatPage({ user, profile, tk, isMobile }: {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isLoading]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || isLoading) return;
+  const autogrow = () => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 120) + "px";
+  };
+
+  const copyMsg = async (id: string, content: string) => {
+    try { await navigator.clipboard.writeText(content); setCopiedId(id); setTimeout(() => setCopiedId(null), 1500); } catch { }
+  };
+
+  const clearChat = () => {
+    setMessages([{ id: "welcome-" + Date.now(), role: "assistant", content: welcomeText, timestamp: new Date() }]);
+    setFailedPrompt(null);
+  };
+
+  const sendMessage = async (override?: string) => {
+    const text = (override ?? input).trim();
+    if (!text || isLoading) return;
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
-      content: input.trim(),
+      content: text,
       timestamp: new Date()
     };
 
+    const historyForApi = [...messages, userMessage]
+      .filter(m => m.id !== "welcome" && !m.id.startsWith("welcome-"))
+      .slice(-10)
+      .map(m => ({ role: m.role, content: m.content.slice(0, 1500) }));
+
     setMessages(prev => [...prev, userMessage]);
     setInput("");
+    setFailedPrompt(null);
     setIsLoading(true);
+    requestAnimationFrame(() => { if (inputRef.current) inputRef.current.style.height = "auto"; });
 
     try {
-      // Prepare context about user's profile
-      const profileContext = profile ? {
-        analysisHistory: profile.recentAnalyses?.slice(-5) || [], // Last 5 analyses
-        following: profile.following || [],
-        notifications: profile.notifications?.slice(-10) || [], // Last 10 notifications
-        totalAnalyses: profile.recentAnalyses?.length || 0,
-        followedUsers: profile.following?.length || 0
-      } : null;
+      // Compact, structured profile context — backend formats the reply.
+      const recent = (profile?.recentAnalyses || []).slice(-5);
+      const contextLines = profile ? [
+        `Total analyses: ${(profile.recentAnalyses || []).length}`,
+        recent.length
+          ? `Recent scores: ${recent.map((h: AnalysisRecord) => {
+              const name = h.github || h.leetcode || h.codeforces || "analysis";
+              const plat = h.github ? "GitHub" : h.leetcode ? "LeetCode" : "Codeforces";
+              return `${name} [${plat}] ${typeof h.score === "number" ? h.score.toFixed(0) : "?"}pts`;
+            }).join("; ")}`
+          : "Recent scores: none yet",
+        `Following: ${(profile.following || []).length} developers`,
+      ].join("\n") : "No profile data yet — user has not run any analysis.";
 
-      const systemPrompt = `You are an AI assistant helping a developer understand their coding profile and progress. 
-
-User Profile Context:
-${profileContext ? `
-- Total analyses performed: ${profileContext.totalAnalyses}
-- Users following: ${profileContext.followedUsers}
-- Recent analysis history: ${profileContext.analysisHistory.map((h: AnalysisRecord) => `${h.github || h.leetcode || h.codeforces} (${h.github ? "GitHub" : h.leetcode ? "LeetCode" : "Codeforces"}): ${h.score?.toFixed(1)} points`).join(', ')}
-- Recent notifications: ${profileContext.notifications.map(n => n.message).join('; ')}
-
-The user can ask about:
-- Their analysis history and scores
-- Following other developers
-- Notifications about score changes
-- General advice about their coding progress
-- Comparisons between different analyses
-` : 'No profile data available yet. The user should analyze some profiles first.'}
-
-Be helpful, concise, and encouraging. Use the profile data to provide personalized insights. If they ask about something not in their profile, suggest they analyze more profiles or follow more developers.`;
-
-      // Disabled - needs backend integration
-      // throw new Error("Chat temporarily disabled - backend integration needed for security");
-
-      const fullPrompt = systemPrompt + "\n\nConversation so far:\n" + 
-        messages.slice(-10).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n') +
-        "\nUser: " + userMessage.content + "\nAssistant:";
+      const prompt = `My profile context:\n${contextLines}\n\nMy question: ${text}\n\nReply in clean, concise Markdown (short bullets, no wide tables).`;
 
       const response = await fetch(`${BACKEND}/ai/insights`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: fullPrompt })
+        body: JSON.stringify({ prompt, conversation_history: historyForApi })
       });
 
-      if (!response.ok) throw new Error(`API request failed: ${response.status}`);
+      if (!response.ok) {
+        const t = await response.text().catch(() => "");
+        throw new Error(t || `API request failed: ${response.status}`);
+      }
 
       const data = await response.json();
-      const aiResponse = data.result || "Sorry, I couldn't generate a response.";
+      const aiResponse = (data.result || "").trim() || "Sorry, I couldn't generate a response.";
 
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -3564,10 +3740,11 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
       console.error("Chat error:", error);
+      setFailedPrompt(text);
       const errorMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: "Sorry, I encountered an error. Please try again later.",
+        content: "⚠️ Something went wrong reaching the AI. Check your connection and try again.",
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -3576,7 +3753,7 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
@@ -3584,55 +3761,106 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
   };
 
   return (
-    <div className="fu">
-      <div style={{ padding: isMobile ? "36px 0 28px" : "56px 0 40px", borderBottom: `1px solid ${tk.border}`, marginBottom: 24 }}>
-        <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 12 }}>AI Assistant</div>
-        <h1 style={{ fontSize: isMobile ? 28 : 38, fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>Chat with Your Profile</h1>
-        <p style={{ fontSize: 14, color: tk.text2, marginTop: 8, lineHeight: 1.4 }}>Ask questions about your coding progress, analysis history, and get personalized insights.</p>
+    <div>
+      <style>{`@keyframes chatBlink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}`}</style>
+      <div style={{ padding: isMobile ? "36px 0 20px" : "56px 0 28px", marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 12 }}>AI Assistant</div>
+          <h1 style={{ fontSize: isMobile ? 28 : 38, fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>Chat with Your Profile</h1>
+          <p style={{ fontSize: 14, color: tk.text2, marginTop: 8, lineHeight: 1.5 }}>Personalized answers from your analysis history — concise, actionable, no fluff.</p>
+        </div>
+        {messages.length > 1 && (
+          <button onClick={clearChat} style={{ flexShrink: 0, padding: "7px 14px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text3, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+            Clear chat
+          </button>
+        )}
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 200px)", maxWidth: 800, margin: "0 auto" }}>
-        {/* Messages */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 20px", marginBottom: 20 }}>
-          {messages.map((message) => (
-            <div key={message.id} style={{
-              display: "flex",
-              marginBottom: 16,
-              justifyContent: message.role === "user" ? "flex-end" : "flex-start"
-            }}>
-              <div style={{
-                maxWidth: "70%",
-                padding: "12px 16px",
-                borderRadius: 12,
-                background: message.role === "user" ? tk.accent : tk.surface,
-                color: message.role === "user" ? tk.accentFg : tk.text,
-                border: message.role === "assistant" ? `1px solid ${tk.border}` : "none",
-                fontSize: 14,
-                lineHeight: 1.4
-              }}>
-                {message.content}
-                <div style={{
-                  fontSize: 10,
-                  color: message.role === "user" ? tk.accentFg + "80" : tk.text3,
-                  marginTop: 4,
-                  textAlign: message.role === "user" ? "right" : "left"
-                }}>
-                  {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </div>
-              </div>
-            </div>
+      {/* Suggestion chips */}
+      {messages.length <= 2 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          {CHAT_SUGGESTIONS.map(s => (
+            <button key={s} onClick={() => sendMessage(s)} disabled={isLoading}
+              style={{ padding: "8px 14px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text2, fontSize: 12.5, fontWeight: 500, cursor: isLoading ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isLoading ? 0.6 : 1, transition: "all 0.15s" }}>
+              {s}
+            </button>
           ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", height: isMobile ? "calc(100vh - 260px)" : "calc(100vh - 280px)", minHeight: 420, maxWidth: 860, margin: "0 auto", background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 14, overflow: "hidden", boxShadow: tk.shadowMd }}>
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "16px 12px" : "22px 24px" }}>
+          {messages.map((message) => {
+            const isUser = message.role === "user";
+            const isError = !isUser && message.content.startsWith("⚠️");
+            return (
+              <div key={message.id} style={{ display: "flex", gap: 10, marginBottom: 18, justifyContent: isUser ? "flex-end" : "flex-start" }}>
+                {!isUser && (
+                  <div style={{ width: 30, height: 30, borderRadius: "50%", background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 2 }}>
+                    <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={tk.blue} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3L13.5 9H19.5L14.5 13L16.5 19L12 15.5L7.5 19L9.5 13L4.5 9H10.5L12 3Z" /></svg>
+                  </div>
+                )}
+                <div style={{
+                  maxWidth: isUser ? "78%" : isMobile ? "92%" : "85%",
+                  minWidth: 0,
+                  padding: isUser ? "11px 15px" : "14px 17px",
+                  borderRadius: isUser ? "16px 16px 4px 16px" : "4px 16px 16px 16px",
+                  background: isUser ? tk.accent : isError ? tk.roseLight : tk.bgAlt,
+                  color: isUser ? tk.accentFg : tk.text,
+                  border: isUser ? "none" : `1px solid ${isError ? tk.roseBorder : tk.border}`,
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                }}>
+                  {isUser ? (
+                    <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message.content}</div>
+                  ) : isError ? (
+                    <div>
+                      <div style={{ fontSize: 13.5, color: tk.text2, lineHeight: 1.6 }}>{message.content}</div>
+                      {failedPrompt && (
+                        <button onClick={() => sendMessage(failedPrompt)}
+                          style={{ marginTop: 10, padding: "7px 14px", borderRadius: 7, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                          Retry
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <ChatMarkdown text={message.content} tk={tk} />
+                  )}
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    justifyContent: isUser ? "flex-end" : "flex-start",
+                    fontSize: 10, color: isUser ? tk.accentFg + "90" : tk.text3, marginTop: 8,
+                  }}>
+                    <span>{new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    {!isUser && !isError && (
+                      <button onClick={() => copyMsg(message.id, message.content)}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: copiedId === message.id ? tk.green : tk.text3, fontSize: 10, fontWeight: 600, fontFamily: "inherit", padding: 0 }}>
+                        {copiedId === message.id ? "✓ Copied" : "Copy"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {isUser && (
+                  <div style={{ width: 30, height: 30, borderRadius: "50%", background: tk.accent, color: tk.accentFg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0, marginTop: 2 }}>
+                    {initial(user.name)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {isLoading && (
-            <div style={{ display: "flex", marginBottom: 16, justifyContent: "flex-start" }}>
-              <div style={{
-                padding: "12px 16px",
-                borderRadius: 12,
-                background: tk.surface,
-                border: `1px solid ${tk.border}`,
-                fontSize: 14,
-                color: tk.text3
-              }}>
-                Thinking...
+            <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+              <div style={{ width: 30, height: 30, borderRadius: "50%", background: tk.blueLight, border: `1px solid ${tk.blueBorder}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={tk.blue} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3L13.5 9H19.5L14.5 13L16.5 19L12 15.5L7.5 19L9.5 13L4.5 9H10.5L12 3Z" /></svg>
+              </div>
+              <div style={{ padding: "14px 18px", borderRadius: "4px 16px 16px 16px", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ display: "flex", gap: 4 }}>
+                  {[0, 1, 2].map(d => (
+                    <span key={d} style={{ width: 7, height: 7, borderRadius: "50%", background: tk.blue, display: "inline-block", animation: "chatBlink 1.2s infinite", animationDelay: `${d * 0.2}s` }} />
+                  ))}
+                </span>
+                <span style={{ fontSize: 12.5, color: tk.text3 }}>DevIQ AI is thinking…</span>
               </div>
             </div>
           )}
@@ -3640,46 +3868,40 @@ Be helpful, concise, and encouraging. Use the profile data to provide personaliz
         </div>
 
         {/* Input */}
-        <div style={{ padding: "0 20px 20px", borderTop: `1px solid ${tk.border}`, paddingTop: 20 }}>
-          <div style={{ display: "flex", gap: 12 }}>
-            <input
-              type="text"
+        <div style={{ padding: "14px 16px", borderTop: `1px solid ${tk.border}`, background: tk.surface }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+            <textarea
+              ref={inputRef}
+              rows={1}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Ask about your profile, analysis history, or coding progress..."
+              onChange={(e) => { setInput(e.target.value); autogrow(); }}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask about your progress, weak areas, next steps…"
               style={{
-                flex: 1,
-                padding: "12px 16px",
-                border: `1px solid ${tk.border}`,
-                borderRadius: 8,
-                background: tk.bg,
-                color: tk.text,
-                fontSize: 14,
-                outline: "none"
+                flex: 1, resize: "none", maxHeight: 120,
+                padding: "12px 15px", border: `1px solid ${tk.border}`, borderRadius: 10,
+                background: tk.bg, color: tk.text, fontSize: 14, lineHeight: 1.5,
+                outline: "none", fontFamily: "inherit",
               }}
               disabled={isLoading}
             />
             <button
-              onClick={sendMessage}
+              onClick={() => sendMessage()}
               disabled={!input.trim() || isLoading}
               style={{
-                padding: "12px 20px",
-                border: "none",
-                borderRadius: 8,
+                padding: "12px 18px", border: "none", borderRadius: 10,
                 background: (!input.trim() || isLoading) ? tk.border : tk.accent,
                 color: (!input.trim() || isLoading) ? tk.text3 : tk.accentFg,
                 cursor: (!input.trim() || isLoading) ? "not-allowed" : "pointer",
-                fontSize: 14,
-                fontWeight: 600,
-                transition: "all 0.2s"
+                fontSize: 14, fontWeight: 600, fontFamily: "inherit", flexShrink: 0,
+                display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s",
               }}
             >
-              {isLoading ? "..." : "Send"}
+              {isLoading ? "…" : (<>Send <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg></>)}
             </button>
           </div>
           <div style={{ fontSize: 11, color: tk.text3, marginTop: 8, textAlign: "center" }}>
-            Press Enter to send • AI responses are based on your profile data
+            Enter to send • Shift+Enter for new line • Answers use your real profile data
           </div>
         </div>
       </div>
