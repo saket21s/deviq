@@ -495,12 +495,10 @@ export default function PlaygroundPage({
   tk,
   isMobile,
   dark,
-  userName,
 }: {
   tk: PlaygroundTheme;
   isMobile: boolean;
   dark: boolean;
-  userName: string;
 }) {
   const [language, setLanguage] = useState("javascript");
   const langDef = useMemo(
@@ -521,8 +519,8 @@ export default function PlaygroundPage({
   // Dedicated stdin box: one input line per row, fed in order.
   const [stdinText, setStdinText] = useState("");
   const [elapsed, setElapsed] = useState(0);
-  // Sample name shown in examples — the login Gmail handle, never a hardcoded name.
-  const exampleName = (userName || "").trim() || "Alex";
+  // Neutral sample name for examples — never a hardcoded personal name.
+  const exampleName = "Alex";
 
   /* ── Terminal state ── */
   const [transcript, setTranscript] = useState<TLine[]>([]);

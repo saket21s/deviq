@@ -3644,7 +3644,8 @@ function ChatPage({ user, profile, tk, isMobile, messages, setMessages }: {
   user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean;
   messages: ChatMessage[]; setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }) {
-  const welcomeText = `Hello ${user.name}! I'm your DevIQ coach. I can see your analysis history and scores — ask me anything about your progress, weak areas, or what to do next.`;
+  const chatHandle = gmailHandle(user) || user.name;
+  const welcomeText = `Hello ${chatHandle}! I'm your DevIQ coach. I can see your analysis history and scores — ask me anything about your progress, weak areas, or what to do next.`;
   // Thread lives in the parent so it survives tab switches (in-memory only — resets on refresh).
   const shown: ChatMessage[] = messages.length > 0
     ? messages
@@ -3713,6 +3714,7 @@ function ChatPage({ user, profile, tk, isMobile, messages, setMessages }: {
       // Compact, structured profile context — backend formats the reply.
       const recent = (profile?.recentAnalyses || []).slice(-5);
       const contextLines = profile ? [
+        `Chatting with: ${chatHandle}`,
         `Total analyses: ${(profile.recentAnalyses || []).length}`,
         recent.length
           ? `Recent scores: ${recent.map((h: AnalysisRecord) => {
@@ -3932,12 +3934,6 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   const [solvedProblems, setSolvedProblems] = useState<SolvedProblem[]>(p?.solvedProblems || []);
   const [loading, setLoading] = useState(false);
   const [leetcodeUsername, setLeetcodeUsername] = useState("");
-
-  // Default to the login Gmail handle until the user types their own.
-  useEffect(() => {
-    const h = gmailHandle(user);
-    if (h) setLeetcodeUsername(v => v || h);
-  }, [user?.email]);
 
   // ── Company Tags state ──
   const [companyList, setCompanyList] = useState<CompanyInfo[]>([]);
@@ -5630,9 +5626,6 @@ export default function Page() {
     setUser(null);
     setProfile(null);
     setChatMessages([]);
-    setGh(""); setLc(""); setCf("");
-    setGithubUsername(""); setLeetcodeUsername(""); setCodeforcesUsername("");
-    try { sessionStorage.removeItem("deviq_gh"); sessionStorage.removeItem("deviq_lc"); sessionStorage.removeItem("deviq_cf"); } catch { }
     setMenuOpen(false);
     setUserMenuOpen(false);
     window.history.replaceState({ page: "home" }, "", "");
@@ -5842,18 +5835,6 @@ export default function Page() {
   const [githubUsername, setGithubUsername] = useState("");
   const [leetcodeUsername, setLeetcodeUsername] = useState("");
   const [codeforcesUsername, setCodeforcesUsername] = useState("");
-
-  // Prefill every username field from the login Gmail handle (fills blanks only).
-  useEffect(() => {
-    const h = gmailHandle(user);
-    if (!h) return;
-    setGh(v => v || h);
-    setLc(v => v || h);
-    setCf(v => v || h);
-    setGithubUsername(v => v || h);
-    setLeetcodeUsername(v => v || h);
-    setCodeforcesUsername(v => v || h);
-  }, [user?.email]);
 
   // Load connected accounts when user logs in
   useEffect(() => {
@@ -6746,7 +6727,7 @@ export default function Page() {
 
           {/* PLAYGROUND — login required, like chat/practice/review */}
           {page === "playground" && user && (
-            <PlaygroundPage tk={tk} isMobile={isMobile} dark={dark} userName={gmailHandle(user)} />
+            <PlaygroundPage tk={tk} isMobile={isMobile} dark={dark} />
           )}
           {page === "playground" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
