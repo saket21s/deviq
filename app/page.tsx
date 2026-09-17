@@ -807,6 +807,13 @@ function initial(str?: string): string {
   return "?";
 }
 
+/* Gmail handle of the logged-in user — used as the default username everywhere. */
+function gmailHandle(user: AuthUser | null): string {
+  const prefix = ((user?.email || "").trim().split("@")[0] || "")
+    .toLowerCase().replace(/[^a-z0-9-_]/g, "").slice(0, 39);
+  return prefix;
+}
+
 function pwStrength(pw: string): number {
   if (!pw) return 0; let s = 0;
   if (pw.length >= 8) s++; if (pw.length >= 12) s++;
@@ -3926,6 +3933,12 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   const [loading, setLoading] = useState(false);
   const [leetcodeUsername, setLeetcodeUsername] = useState("");
 
+  // Default to the login Gmail handle until the user types their own.
+  useEffect(() => {
+    const h = gmailHandle(user);
+    if (h) setLeetcodeUsername(v => v || h);
+  }, [user?.email]);
+
   // ── Company Tags state ──
   const [companyList, setCompanyList] = useState<CompanyInfo[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string>("");
@@ -5617,6 +5630,9 @@ export default function Page() {
     setUser(null);
     setProfile(null);
     setChatMessages([]);
+    setGh(""); setLc(""); setCf("");
+    setGithubUsername(""); setLeetcodeUsername(""); setCodeforcesUsername("");
+    try { sessionStorage.removeItem("deviq_gh"); sessionStorage.removeItem("deviq_lc"); sessionStorage.removeItem("deviq_cf"); } catch { }
     setMenuOpen(false);
     setUserMenuOpen(false);
     window.history.replaceState({ page: "home" }, "", "");
@@ -5826,6 +5842,18 @@ export default function Page() {
   const [githubUsername, setGithubUsername] = useState("");
   const [leetcodeUsername, setLeetcodeUsername] = useState("");
   const [codeforcesUsername, setCodeforcesUsername] = useState("");
+
+  // Prefill every username field from the login Gmail handle (fills blanks only).
+  useEffect(() => {
+    const h = gmailHandle(user);
+    if (!h) return;
+    setGh(v => v || h);
+    setLc(v => v || h);
+    setCf(v => v || h);
+    setGithubUsername(v => v || h);
+    setLeetcodeUsername(v => v || h);
+    setCodeforcesUsername(v => v || h);
+  }, [user?.email]);
 
   // Load connected accounts when user logs in
   useEffect(() => {
@@ -6718,7 +6746,7 @@ export default function Page() {
 
           {/* PLAYGROUND — login required, like chat/practice/review */}
           {page === "playground" && user && (
-            <PlaygroundPage tk={tk} isMobile={isMobile} dark={dark} />
+            <PlaygroundPage tk={tk} isMobile={isMobile} dark={dark} userName={gmailHandle(user)} />
           )}
           {page === "playground" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>

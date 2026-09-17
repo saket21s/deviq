@@ -495,10 +495,12 @@ export default function PlaygroundPage({
   tk,
   isMobile,
   dark,
+  userName,
 }: {
   tk: PlaygroundTheme;
   isMobile: boolean;
   dark: boolean;
+  userName: string;
 }) {
   const [language, setLanguage] = useState("javascript");
   const langDef = useMemo(
@@ -519,6 +521,8 @@ export default function PlaygroundPage({
   // Dedicated stdin box: one input line per row, fed in order.
   const [stdinText, setStdinText] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  // Sample name shown in examples — the login Gmail handle, never a hardcoded name.
+  const exampleName = (userName || "").trim() || "Alex";
 
   /* ── Terminal state ── */
   const [transcript, setTranscript] = useState<TLine[]>([]);
@@ -1189,7 +1193,7 @@ export default function PlaygroundPage({
           pushT("sys", "live session should have prompted you — it failed. Retry, or fill the INPUT box and Run again.");
         } else if (live && !liveSupportsLang) {
           pushT("err", `no stdin provided, but this program reads input (${INPUT_HINT[language] ?? "stdin"}).`);
-          pushT("sys", `the live runner cannot prompt for ${language} (no toolchain). Fill the INPUT box above (one value per line: e.g. Saket\\n21\\n90) and press Run again.`);
+          pushT("sys", `the live runner cannot prompt for ${language} (no toolchain). Fill the INPUT box above (one value per line: e.g. ${exampleName}\\n21\\n90) and press Run again.`);
           pushT("sys", `to enable live prompts, redeploy the backend Docker image with ${language === "java" ? "JDK" : "the " + language + " toolchain"}.`);
         } else {
           pushT("err", `no stdin provided, but this program reads input (${INPUT_HINT[language] ?? "stdin"}).`);
@@ -1740,7 +1744,7 @@ export default function PlaygroundPage({
         <textarea
           value={stdinText}
           onChange={(e) => setStdinText(e.target.value)}
-          placeholder={`One input per line, in the order the program reads it.\nExample:\nSaket\n21\n90`}
+          placeholder={`One input per line, in the order the program reads it.\nExample:\n${exampleName}\n21\n90`}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
