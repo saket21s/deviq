@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback, useRef, useMemo, CSSProperties, ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -3632,13 +3633,15 @@ interface ChatMessage {
   timestamp: Date;
 }
 
-function ChatPage({ user, profile, tk, isMobile }: {
+function ChatPage({ user, profile, tk, isMobile, messages, setMessages }: {
   user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean;
+  messages: ChatMessage[]; setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
 }) {
   const welcomeText = `Hello ${user.name}! I'm your DevIQ coach. I can see your analysis history and scores — ask me anything about your progress, weak areas, or what to do next.`;
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: "welcome", role: "assistant", content: welcomeText, timestamp: new Date() }
-  ]);
+  // Thread lives in the parent so it survives tab switches (in-memory only — resets on refresh).
+  const shown: ChatMessage[] = messages.length > 0
+    ? messages
+    : [{ id: "welcome", role: "assistant", content: welcomeText, timestamp: new Date() }];
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
@@ -3761,15 +3764,15 @@ function ChatPage({ user, profile, tk, isMobile }: {
   };
 
   return (
-    <div>
+    <div style={{ height: "calc(100vh - 96px)", minHeight: isMobile ? 500 : 560, display: "flex", flexDirection: "column", maxWidth: 860, margin: "0 auto -72px", paddingBottom: 8 }}>
       <style>{`@keyframes chatBlink{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-2px)}}`}</style>
-      <div style={{ padding: isMobile ? "36px 0 20px" : "56px 0 28px", marginBottom: 20, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12 }}>
+      <div style={{ padding: "4px 0 10px", marginBottom: 8, display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexShrink: 0 }}>
         <div>
-          <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 12 }}>AI Assistant</div>
-          <h1 style={{ fontSize: isMobile ? 28 : 38, fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>Chat with Your Profile</h1>
-          <p style={{ fontSize: 14, color: tk.text2, marginTop: 8, lineHeight: 1.5 }}>Personalized answers from your analysis history — concise, actionable, no fluff.</p>
+          <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 6 }}>AI Assistant</div>
+          <h1 style={{ fontSize: isMobile ? 20 : 24, fontWeight: 700, letterSpacing: "-0.03em", color: tk.text, lineHeight: 1.15 }}>Chat with Your Profile</h1>
+          <p style={{ fontSize: 13, color: tk.text2, marginTop: 4, lineHeight: 1.4 }}>Personalized answers from your analysis history — concise, actionable, no fluff.</p>
         </div>
-        {messages.length > 1 && (
+        {shown.length > 1 && (
           <button onClick={clearChat} style={{ flexShrink: 0, padding: "7px 14px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text3, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
             Clear chat
           </button>
@@ -3777,8 +3780,8 @@ function ChatPage({ user, profile, tk, isMobile }: {
       </div>
 
       {/* Suggestion chips */}
-      {messages.length <= 2 && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+      {shown.length <= 2 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "0 0 10px", justifyContent: "flex-start", flexShrink: 0 }}>
           {CHAT_SUGGESTIONS.map(s => (
             <button key={s} onClick={() => sendMessage(s)} disabled={isLoading}
               style={{ padding: "8px 14px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, color: tk.text2, fontSize: 12.5, fontWeight: 500, cursor: isLoading ? "not-allowed" : "pointer", fontFamily: "inherit", opacity: isLoading ? 0.6 : 1, transition: "all 0.15s" }}>
@@ -3788,10 +3791,10 @@ function ChatPage({ user, profile, tk, isMobile }: {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", height: isMobile ? "calc(100vh - 260px)" : "calc(100vh - 280px)", minHeight: 420, maxWidth: 860, margin: "0 auto", background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 14, overflow: "hidden", boxShadow: tk.shadowMd }}>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 14, overflow: "hidden", boxShadow: tk.shadowMd }}>
         {/* Messages */}
-        <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "16px 12px" : "22px 24px" }}>
-          {messages.map((message) => {
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: isMobile ? "16px 12px" : "22px 24px" }}>
+          {shown.map((message) => {
             const isUser = message.role === "user";
             const isError = !isUser && message.content.startsWith("⚠️");
             return (
@@ -4196,7 +4199,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   return (
     <div className="fu">
       <div style={{ padding: isMobile ? "36px 0 28px" : "56px 0 40px", borderBottom: `1px solid ${tk.border}`, marginBottom: 24 }}>
-        <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 12 }}>Daily Practice</div>
+        <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 12 }}>Interview Prep</div>
         <h1 style={{ fontSize: isMobile ? 28 : 38, fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>What Should You Solve Today?</h1>
         <p style={{ fontSize: 14, color: tk.text2, marginTop: 8, lineHeight: 1.4 }}>Get personalized LeetCode problem recommendations based on your weak categories.</p>
       </div>
@@ -5242,7 +5245,7 @@ export default function Page() {
 
   const navigate = useCallback((to: Page, replace = false) => {
     setPage(to); setMenuOpen(false); setUserMenuOpen(false);
-    if (to === "home") window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo(0, 0); // every tab starts at the top — otherwise headers/avatars sit above the fold
     const url = to === "home" ? "/" : `/${to}`;
     if (replace) window.history.replaceState({ page: to }, "", url);
     else window.history.pushState({ page: to }, "", url);
@@ -5262,20 +5265,37 @@ export default function Page() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+  const menuPanelRef = useRef<HTMLDivElement>(null);
+  // Viewport anchor for the account menu (fixed positioning — immune to ancestor layout quirks).
+  const [menuAnchor, setMenuAnchor] = useState<{ top: number; left: number } | null>(null);
+  const openUserMenu = (e: React.MouseEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenuAnchor({ top: r.bottom + 8, left: Math.max(8, Math.min(r.left + r.width / 2 - 111, window.innerWidth - 226)) });
+    setUserMenuOpen(o => !o);
+  };
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  // Chat thread lifted here so it survives tab switches (in-memory — cleared on refresh).
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
 
-  // ── Close user menu on click outside ──
+  // ── Close user menu on click outside / scroll / resize (menu is viewport-fixed) ──
   useEffect(() => {
     if (!userMenuOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
-        setUserMenuOpen(false);
-      }
+      const t = e.target as Node;
+      if (userMenuRef.current?.contains(t) || menuPanelRef.current?.contains(t)) return;
+      setUserMenuOpen(false);
     };
+    const close = () => setUserMenuOpen(false);
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
   }, [userMenuOpen]);
 
   // ── Real-time sync refs ──
@@ -5596,6 +5616,7 @@ export default function Page() {
     clearSession();
     setUser(null);
     setProfile(null);
+    setChatMessages([]);
     setMenuOpen(false);
     setUserMenuOpen(false);
     window.history.replaceState({ page: "home" }, "", "");
@@ -6089,6 +6110,18 @@ export default function Page() {
   const [navSections, setNavSections] = useState<{ label: string; id: string }[]>([]);
   useEffect(() => { if (showSections) setNavSections(navLinks); }, [showSections]); // keep last set while collapsing for a smooth close
   const [activeSection, setActiveSection] = useState<string>("");
+  // Detect when the tab row overflows so we can fade the clipped edge.
+  const navScrollRef = useRef<HTMLDivElement>(null);
+  const [navOverflow, setNavOverflow] = useState(false);
+  useEffect(() => {
+    const el = navScrollRef.current;
+    if (!el) return;
+    const check = () => setNavOverflow(el.scrollWidth > el.clientWidth + 4);
+    check();
+    const t = setTimeout(check, 400); // re-check after the expand animation settles
+    window.addEventListener("resize", check);
+    return () => { clearTimeout(t); window.removeEventListener("resize", check); };
+  }, [navSections.length, showSections, page, user]);
   const scrollLockRef = useRef(0);
   useEffect(() => {
     if (!(data && page === "analyze")) { setActiveSection(""); return; }
@@ -6160,6 +6193,8 @@ export default function Page() {
         button:focus-visible{outline:2px solid #1A6FF4;outline-offset:2px;}
         .nav-auth-btn{transition:all 0.15s;}
         .nav-auth-btn:hover{opacity:0.85;}
+        .nav-scroll{scrollbar-width:none;-ms-overflow-style:none;}
+        .nav-scroll::-webkit-scrollbar{display:none;}
       `}</style>
 
       <div suppressHydrationWarning style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: "'Geist', system-ui, sans-serif", transition: "background 0.2s, color 0.2s" }}>
@@ -6168,25 +6203,25 @@ export default function Page() {
 
         {/* NAVBAR */}
         <nav suppressHydrationWarning style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 200, background: "transparent", padding: isMobile ? "10px 12px 0" : isTablet ? "14px 16px 0" : "14px 96px 0 16px" }}>
-          <div style={{ position: "relative", maxWidth: 1200, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: isMobile ? 8 : isTablet ? 10 : 30, height: isMobile ? 48 : isTablet ? 56 : 50, padding: isMobile ? "0 8px 0 18px" : isTablet ? "0 12px 0 22px" : "0 8px 0 24px", margin: "0 auto", width: isMobile || isTablet ? "100%" : "auto", maxWidth: isMobile || isTablet ? "100%" : "fit-content", background: dark ? "rgba(26,26,26,0.72)" : "rgba(255,255,255,0.62)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", border: dark ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(255,255,255,0.85)", borderRadius: 999, boxShadow: dark ? "0 4px 20px rgba(0,0,0,0.4), inset 0 0.5px 0 rgba(255,255,255,0.05)" : "0 4px 20px rgba(0,0,0,0.04), inset 0 0.5px 0 rgba(255,255,255,0.72)", willChange: "width", backfaceVisibility: "hidden" }}>
+          <div style={{ position: "relative", maxWidth: 1600, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: isMobile ? 8 : isTablet ? 10 : 14, height: isMobile ? 48 : isTablet ? 56 : 50, padding: isMobile ? "0 8px 0 18px" : isTablet ? "0 12px 0 22px" : "0 8px 0 24px", margin: "0 auto", width: "100%", maxWidth: showSections ? "1290px" : "880px", transition: "max-width 0.32s cubic-bezier(0.22,1,0.36,1)", background: dark ? "rgba(26,26,26,0.72)" : "rgba(255,255,255,0.62)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", border: dark ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(255,255,255,0.85)", borderRadius: 999, boxShadow: dark ? "0 4px 20px rgba(0,0,0,0.4), inset 0 0.5px 0 rgba(255,255,255,0.05)" : "0 4px 20px rgba(0,0,0,0.04), inset 0 0.5px 0 rgba(255,255,255,0.72)", willChange: "max-width", backfaceVisibility: "hidden" }}>
             <button onClick={() => navigate("home")} style={{ fontSize: isMobile ? 17 : isTablet ? 19 : 17, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0, display: "flex", alignItems: "center" }}>DevIQ</button>
             {!isMobile && !isTablet && (
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "review" as const, label: "Review" }] as { id: Page; label: string }[]).map(item => (
-                  <button key={item.id} onClick={() => navigate(item.id)} style={{ padding: "7px 16px", borderRadius: 999, cursor: "pointer", fontSize: 13, fontWeight: page === item.id ? 600 : 500, color: page === item.id ? "#fff" : tk.text2, background: page === item.id ? (dark ? "rgba(255,255,255,0.16)" : "rgba(10,10,10,0.78)") : "transparent", backdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", WebkitBackdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", border: page === item.id ? `1px solid ${dark ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.22)"}` : "1px solid transparent", boxShadow: page === item.id ? "inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 14px rgba(0,0,0,0.28)" : "none", transition: "all 0.15s" }}
+              <div ref={navScrollRef} className="nav-scroll" style={{ display: "flex", alignItems: "center", gap: 2, flex: 1, minWidth: 0, overflowX: "auto", scrollbarWidth: "none", justifyContent: "center", WebkitMaskImage: navOverflow ? "linear-gradient(90deg, #000 calc(100% - 30px), transparent)" : "none", maskImage: navOverflow ? "linear-gradient(90deg, #000 calc(100% - 30px), transparent)" : "none" }}>
+                {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "chat" as const, label: "Ask AI" }, { id: "practice" as const, label: "Interview Prep" }] as { id: Page; label: string }[]).map(item => (
+                  <button key={item.id} onClick={() => navigate(item.id)} style={{ padding: "8px 14px", whiteSpace: "nowrap", flexShrink: 0, borderRadius: 999, cursor: "pointer", fontSize: 13.5, fontWeight: page === item.id ? 600 : 500, color: page === item.id ? "#fff" : tk.text2, background: page === item.id ? (dark ? "rgba(255,255,255,0.16)" : "rgba(10,10,10,0.78)") : "transparent", backdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", WebkitBackdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", border: page === item.id ? `1px solid ${dark ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.22)"}` : "1px solid transparent", boxShadow: page === item.id ? "inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 14px rgba(0,0,0,0.28)" : "none", transition: "all 0.15s" }}
                     onMouseEnter={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.bgAlt; } }}
                     onMouseLeave={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text2; (e.currentTarget as HTMLElement).style.background = "transparent"; } }}>
                     {item.label}
                   </button>
                 ))}
                 {navSections.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 4, overflow: "hidden", whiteSpace: "nowrap", maxWidth: showSections ? 500 : 0, opacity: showSections ? 1 : 0, transition: "max-width 0.35s ease, opacity 0.25s ease" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 2, overflow: "hidden", whiteSpace: "nowrap", flexShrink: 0, maxWidth: showSections ? 2000 : 0, opacity: showSections ? 1 : 0, transition: "max-width 0.3s cubic-bezier(0.22,1,0.36,1), opacity 0.2s ease" }}>
                     <div style={{ width: 1, height: 16, background: tk.border, margin: "0 6px", flexShrink: 0 }} />
                     {navSections.map(l => {
                       const isActive = l.id === activeSection;
                       return (
-                      <button key={l.id} onClick={() => scroll(l.id)} style={{ padding: "7px 13px", borderRadius: 999, border: `1px solid ${isActive ? (dark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.06)") : "transparent"}`, background: isActive ? (dark ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.92)") : "transparent", backdropFilter: isActive ? "blur(8px) saturate(150%)" : "none", WebkitBackdropFilter: isActive ? "blur(8px) saturate(150%)" : "none", boxShadow: isActive ? (dark ? "0 0 14px rgba(255,255,255,0.12), inset 0 1px 0 rgba(255,255,255,0.16)" : "0 2px 12px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.8)") : "none", cursor: "pointer", fontSize: 13, fontWeight: isActive ? 600 : 500, color: isActive ? tk.text : tk.text3, transition: "all 0.18s", flexShrink: 0 }}
+                      <button key={l.id} onClick={() => scroll(l.id)} style={{ padding: "7px 12px", whiteSpace: "nowrap", borderRadius: 999, border: `1px solid ${isActive ? (dark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.06)") : "transparent"}`, background: isActive ? (dark ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.92)") : "transparent", backdropFilter: isActive ? "blur(8px) saturate(150%)" : "none", WebkitBackdropFilter: isActive ? "blur(8px) saturate(150%)" : "none", boxShadow: isActive ? (dark ? "0 0 14px rgba(255,255,255,0.12), inset 0 1px 0 rgba(255,255,255,0.16)" : "0 2px 12px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.8)") : "none", cursor: "pointer", fontSize: 13, fontWeight: isActive ? 600 : 500, color: isActive ? tk.text : tk.text3, transition: "all 0.18s", flexShrink: 0 }}
                         onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.bgAlt; } }}
                         onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLElement).style.color = tk.text3; (e.currentTarget as HTMLElement).style.background = "transparent"; } }}>
                         {l.label}
@@ -6197,40 +6232,44 @@ export default function Page() {
                 )}
               </div>
             )}
-            <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: isMobile ? 6 : 8, flexShrink: 0 }}>
               {!isMobile && !isTablet && !user && (<>
                 <button onClick={() => setAuthModal("login")} style={{ padding: "8px 16px", borderRadius: 999, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 500, color: tk.text2, transition: "all 0.15s" }}>Log in</button>
                 <button onClick={() => setAuthModal("signup")} style={{ padding: "8px 18px", borderRadius: 999, border: "none", background: tk.accent, cursor: "pointer", fontSize: 13, fontWeight: 600, color: tk.accentFg }}>Sign up</button>
               </>)}
               {!isMobile && !isTablet && user && (
                 <div ref={userMenuRef} style={{ position: "relative" }}>
-                  <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
+                  <button onClick={openUserMenu} style={{ display: "flex", alignItems: "center", gap: 7, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
                     {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
                     <div style={{ width: 24, height: 24, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
                     <span style={{ fontSize: 12, fontWeight: 500, color: tk.text, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name}</span>
                     <svg width={10} height={10} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </button>
-                  {userMenuOpen && (
-                    <div className="slide-down" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 9, boxShadow: tk.shadowMd, minWidth: 180, overflow: "hidden", zIndex: 300 }}>
-                      <div style={{ padding: "12px 14px 10px", borderBottom: `1px solid ${tk.border}` }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                          {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} /> : null}
-                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{initial(user.name)}</div>
-                          <div><div style={{ fontSize: 12, fontWeight: 600, color: tk.text }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}</div>
-                        </div>
-                        <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
+                  {userMenuOpen && createPortal((
+                    <div ref={menuPanelRef} style={{ position: "fixed", top: menuAnchor ? menuAnchor.top : 70, left: menuAnchor ? menuAnchor.left : 16, minWidth: 210, overflow: "visible", zIndex: 300, borderRadius: 16, padding: 6,
+                      background: dark ? "linear-gradient(165deg, rgba(42,42,48,0.80), rgba(18,18,22,0.86))" : "linear-gradient(165deg, rgba(255,255,255,0.90), rgba(255,255,255,0.74))",
+                      backdropFilter: "blur(28px) saturate(170%)", WebkitBackdropFilter: "blur(28px) saturate(170%)",
+                      border: dark ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(255,255,255,0.9)",
+                      boxShadow: dark ? "0 24px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.14)" : "0 24px 60px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.85)",
+                      transformOrigin: "top right", animation: "popIn 0.22s cubic-bezier(0.16,1,0.3,1) backwards" }}>
+                      <div style={{ padding: "10px 12px 8px", display: "flex", alignItems: "center", gap: 10, animation: "fadeUp 0.3s cubic-bezier(0.4,0,0.2,1) backwards" }}>
+                        {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: dark ? "1px solid rgba(255,255,255,0.16)" : "1px solid rgba(0,0,0,0.08)" }} /> : null}
+                        <div style={{ width: 32, height: 32, borderRadius: "50%", background: tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#fff" }}>{initial(user.name)}</div>
+                        <div style={{ minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: tk.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}<div style={{ fontSize: 10.5, color: tk.text3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div></div>
                       </div>
-                      {[{ label: "Profile", action: () => navigate("profile") }, { label: "Playground", action: () => navigate("playground") }, { label: "Code Review", action: () => navigate("review") }, { label: "Following", action: () => navigate("following") }, { label: "History", action: () => navigate("history") }, { label: "Practice", action: () => navigate("practice") }, { label: "Chat", action: () => navigate("chat") }, { label: "Settings", action: () => navigate("settings") }].map(item => (
-                        <button key={item.label} onClick={item.action} style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 12, color: tk.text2, fontFamily: "inherit", transition: "background 0.12s" }}
-                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.bgAlt}
-                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>{item.label}</button>
+                      <div style={{ height: 1, margin: "4px 10px 6px", background: dark ? "linear-gradient(90deg, transparent, rgba(255,255,255,0.14), transparent)" : "linear-gradient(90deg, transparent, rgba(0,0,0,0.10), transparent)" }} />
+                      {[{ label: "Profile", action: () => navigate("profile"), icon: <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> }, { label: "Settings", action: () => navigate("settings"), icon: <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg> }].map((item, i) => (
+                        <button key={item.label} onClick={item.action} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "9px 12px", margin: "1px 0", borderRadius: 10, border: "1px solid transparent", background: "transparent", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: tk.text, fontFamily: "inherit", transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s", animation: "fadeUp 0.3s cubic-bezier(0.4,0,0.2,1) backwards", animationDelay: `${70 + i * 50}ms` }}
+                          onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.background = dark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.95)"; el.style.borderColor = dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.07)"; el.style.boxShadow = dark ? "0 2px 14px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12)" : "0 2px 10px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.95)"; el.style.transform = "translateX(2px)"; }}
+                          onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.borderColor = "transparent"; el.style.boxShadow = "none"; el.style.transform = "none"; }}>
+                          <span style={{ color: tk.text3, display: "flex", flexShrink: 0 }}>{item.icon}</span>{item.label}</button>
                       ))}
-                      <div style={{ height: 1, background: tk.border }} />
-                      <button onClick={handleLogout} style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 12, color: tk.rose, fontFamily: "inherit" }}
-                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.roseLight}
-                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>Sign out</button>
-                    </div>
-                  )}
+                      <div style={{ height: 1, margin: "6px 10px", background: dark ? "linear-gradient(90deg, transparent, rgba(255,255,255,0.14), transparent)" : "linear-gradient(90deg, transparent, rgba(0,0,0,0.10), transparent)" }} />
+                      <button onClick={handleLogout} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "9px 12px", margin: "1px 0", borderRadius: 10, border: "1px solid transparent", background: "transparent", cursor: "pointer", fontSize: 12.5, fontWeight: 600, color: tk.rose, fontFamily: "inherit", transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s", animation: "fadeUp 0.3s cubic-bezier(0.4,0,0.2,1) backwards", animationDelay: "170ms" }}
+                        onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.background = dark ? "rgba(248,113,113,0.16)" : tk.roseLight; el.style.borderColor = dark ? "rgba(248,113,113,0.25)" : tk.roseBorder; el.style.boxShadow = dark ? "0 2px 14px rgba(248,113,113,0.2), inset 0 1px 0 rgba(255,255,255,0.10)" : "0 2px 10px rgba(220,38,38,0.12)"; el.style.transform = "translateX(2px)"; }}
+                        onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.borderColor = "transparent"; el.style.boxShadow = "none"; el.style.transform = "none"; }}>
+                        <span style={{ display: "flex", flexShrink: 0 }}><svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg></span>Sign out</button>
+                    </div>), document.body)}
                 </div>
               )}
               {(isMobile || isTablet) && !user && (
@@ -6241,32 +6280,36 @@ export default function Page() {
               )}
               {(isMobile || isTablet) && user && (
                 <div ref={userMenuRef} style={{ position: "relative" }}>
-                  <button onClick={() => setUserMenuOpen(o => !o)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
+                  <button onClick={openUserMenu} style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px 4px 4px", borderRadius: 20, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer" }}>
                     {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
                     <div style={{ width: 26, height: 26, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 600, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
                     <svg width={9} height={9} viewBox="0 0 10 10" fill="none" style={{ flexShrink: 0 }}><path d="M2 3.5L5 6.5L8 3.5" stroke={tk.text3} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                   </button>
-                  {userMenuOpen && (
-                    <div className="slide-down" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 9, boxShadow: tk.shadowMd, minWidth: 160, overflow: "hidden", zIndex: 400 }}>
-                      <div style={{ padding: "12px 14px 10px", borderBottom: `1px solid ${tk.border}` }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                          {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 28, height: 28, borderRadius: "50%", objectFit: "cover" }} /> : null}
-                          <div style={{ width: 28, height: 28, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, color: "#fff" }}>{initial(user.name)}</div>
-                          <div><div style={{ fontSize: 12, fontWeight: 600, color: tk.text }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}</div>
-                        </div>
-                        <div style={{ fontSize: 11, color: tk.text3, marginTop: 2 }}>{user.email}</div>
+                  {userMenuOpen && createPortal((
+                    <div ref={menuPanelRef} style={{ position: "fixed", top: menuAnchor ? menuAnchor.top : 70, left: menuAnchor ? menuAnchor.left : 16, minWidth: 210, overflow: "visible", zIndex: 400, borderRadius: 16, padding: 6,
+                      background: dark ? "linear-gradient(165deg, rgba(42,42,48,0.80), rgba(18,18,22,0.86))" : "linear-gradient(165deg, rgba(255,255,255,0.90), rgba(255,255,255,0.74))",
+                      backdropFilter: "blur(28px) saturate(170%)", WebkitBackdropFilter: "blur(28px) saturate(170%)",
+                      border: dark ? "1px solid rgba(255,255,255,0.12)" : "1px solid rgba(255,255,255,0.9)",
+                      boxShadow: dark ? "0 24px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.14)" : "0 24px 60px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.85)",
+                      transformOrigin: "top right", animation: "popIn 0.22s cubic-bezier(0.16,1,0.3,1) backwards" }}>
+                      <div style={{ padding: "10px 12px 8px", display: "flex", alignItems: "center", gap: 10, animation: "fadeUp 0.3s cubic-bezier(0.4,0,0.2,1) backwards" }}>
+                        {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: dark ? "1px solid rgba(255,255,255,0.16)" : "1px solid rgba(0,0,0,0.08)" }} /> : null}
+                        <div style={{ width: 32, height: 32, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, color: "#fff" }}>{initial(user.name)}</div>
+                        <div style={{ minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 700, color: tk.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.name}</div>{user.provider && <div style={{ fontSize: 10, color: tk.text3, textTransform: "capitalize" }}>via {user.provider}</div>}<div style={{ fontSize: 10.5, color: tk.text3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</div></div>
                       </div>
-                      {[{ label: "Profile", action: () => { navigate("profile"); setUserMenuOpen(false); } }, { label: "Playground", action: () => { navigate("playground"); setUserMenuOpen(false); } }, { label: "Code Review", action: () => { navigate("review"); setUserMenuOpen(false); } }, { label: "Following", action: () => { navigate("following"); setUserMenuOpen(false); } }, { label: "History", action: () => { navigate("history"); setUserMenuOpen(false); } }, { label: "Practice", action: () => { navigate("practice"); setUserMenuOpen(false); } }, { label: "Chat", action: () => { navigate("chat"); setUserMenuOpen(false); } }, { label: "Settings", action: () => { navigate("settings"); setUserMenuOpen(false); } }].map(item => (
-                        <button key={item.label} onClick={item.action} style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: tk.text2, fontFamily: "inherit", transition: "background 0.12s" }}
-                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.bgAlt}
-                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>{item.label}</button>
+                      <div style={{ height: 1, margin: "4px 10px 6px", background: dark ? "linear-gradient(90deg, transparent, rgba(255,255,255,0.14), transparent)" : "linear-gradient(90deg, transparent, rgba(0,0,0,0.10), transparent)" }} />
+                      {[{ label: "Profile", action: () => { navigate("profile"); setUserMenuOpen(false); }, icon: <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> }, { label: "Settings", action: () => { navigate("settings"); setUserMenuOpen(false); }, icon: <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg> }].map((item, i) => (
+                        <button key={item.label} onClick={item.action} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "11px 12px", margin: "1px 0", borderRadius: 10, border: "1px solid transparent", background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 500, color: tk.text, fontFamily: "inherit", transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s", animation: "fadeUp 0.3s cubic-bezier(0.4,0,0.2,1) backwards", animationDelay: `${70 + i * 50}ms` }}
+                          onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.background = dark ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.95)"; el.style.borderColor = dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.07)"; el.style.boxShadow = dark ? "0 2px 14px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.12)" : "0 2px 10px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.95)"; el.style.transform = "translateX(2px)"; }}
+                          onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.borderColor = "transparent"; el.style.boxShadow = "none"; el.style.transform = "none"; }}>
+                          <span style={{ color: tk.text3, display: "flex", flexShrink: 0 }}>{item.icon}</span>{item.label}</button>
                       ))}
-                      <div style={{ height: 1, background: tk.border }} />
-                      <button onClick={() => { handleLogout(); setUserMenuOpen(false); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 14px", border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: tk.rose, fontFamily: "inherit" }}
-                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = tk.roseLight}
-                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "transparent"}>Sign out</button>
-                    </div>
-                  )}
+                      <div style={{ height: 1, margin: "6px 10px", background: dark ? "linear-gradient(90deg, transparent, rgba(255,255,255,0.14), transparent)" : "linear-gradient(90deg, transparent, rgba(0,0,0,0.10), transparent)" }} />
+                      <button onClick={() => { handleLogout(); setUserMenuOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "11px 12px", margin: "1px 0", borderRadius: 10, border: "1px solid transparent", background: "transparent", cursor: "pointer", fontSize: 13, fontWeight: 600, color: tk.rose, fontFamily: "inherit", transition: "background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.15s", animation: "fadeUp 0.3s cubic-bezier(0.4,0,0.2,1) backwards", animationDelay: "170ms" }}
+                        onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.background = dark ? "rgba(248,113,113,0.16)" : tk.roseLight; el.style.borderColor = dark ? "rgba(248,113,113,0.25)" : tk.roseBorder; el.style.boxShadow = dark ? "0 2px 14px rgba(248,113,113,0.2), inset 0 1px 0 rgba(255,255,255,0.10)" : "0 2px 10px rgba(220,38,38,0.12)"; el.style.transform = "translateX(2px)"; }}
+                        onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.background = "transparent"; el.style.borderColor = "transparent"; el.style.boxShadow = "none"; el.style.transform = "none"; }}>
+                        <span style={{ display: "flex", flexShrink: 0 }}><svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg></span>Sign out</button>
+                    </div>), document.body)}
                 </div>
               )}
               {user && profile && (
@@ -6349,7 +6392,7 @@ export default function Page() {
                   </div>
                 </div>
               )}
-              {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "review" as const, label: "Review" }] as { id: Page; label: string }[]).map(item => (
+              {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "chat" as const, label: "Ask AI" }, { id: "practice" as const, label: "Interview Prep" }] as { id: Page; label: string }[]).map(item => (
                 <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
                   width: "100%", textAlign: "left", padding: "13px 12px", margin: "2px 0",
@@ -6656,7 +6699,7 @@ export default function Page() {
           )}
 
           {/* CHAT */}
-          {page === "chat" && user && <ChatPage user={user} profile={profile} tk={tk} isMobile={isMobile} />}
+          {page === "chat" && user && <ChatPage user={user} profile={profile} tk={tk} isMobile={isMobile} messages={chatMessages} setMessages={setChatMessages} />}
           {page === "chat" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to chat with your profile AI.</div>
