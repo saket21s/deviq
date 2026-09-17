@@ -3,10 +3,11 @@ import type { Metadata } from "next";
 /**
  * Central SEO configuration for DevIQ.
  * Single source of truth for site URL, branding, and metadata builders.
- * Production domain: https://deviq.online
+ * Canonical production domain: https://www.deviq.online
+ * (apex deviq.online should 301-redirect to www at the DNS/hosting layer)
  */
 
-export const SITE_URL = "https://deviq.online";
+export const SITE_URL = "https://www.deviq.online";
 export const SITE_NAME = "DevIQ";
 export const SITE_LOCALE = "en_US";
 export const TWITTER_HANDLE = "@deviq_online";

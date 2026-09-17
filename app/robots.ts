@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 import { SITE_URL } from "@/lib/seo";
 
-// https://deviq.online/robots.txt
+// https://www.deviq.online/robots.txt
 // Public SEO pages and the interactive tool are crawlable; auth, API,
 // and private app state are disallowed.
 

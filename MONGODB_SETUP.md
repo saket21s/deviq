@@ -60,7 +60,7 @@ NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=...
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=developerintelligencedashboard
 
 #Frontend origins
-FRONTEND_ORIGINS=http://localhost:3000,https://deviq.online,https://developerintelligencedashboard.web.app
+FRONTEND_ORIGINS=http://localhost:3000,https://deviq.online,https://www.deviq.online,https://developerintelligencedashboard.web.app
 
 # API Keys
 GROQ_API_KEY=...
@@ -99,7 +99,7 @@ gcloud run deploy deviq-api \
   --set-env-vars "MONGODB_URI=YOUR_CONNECTION_STRING" \
   --set-env-vars "GROQ_API_KEY=YOUR_KEY" \
   --set-env-vars "GITHUB_TOKEN=YOUR_TOKEN" \
-  --set-env-vars "FRONTEND_ORIGINS=http://localhost:3000,https://deviq.online"
+  --set-env-vars "FRONTEND_ORIGINS=http://localhost:3000,https://deviq.online,https://www.deviq.online"
 ```
 
 ### 7. Test Backend

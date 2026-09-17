@@ -11,4 +11,4 @@ Disallow: /practice
 Disallow: /compare
 Disallow: /analyze
 
-Sitemap: https://deviq.online/sitemap.xml
+Sitemap: https://www.deviq.online/sitemap.xml

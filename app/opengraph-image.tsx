@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-// Dynamic social preview image: https://deviq.online/opengraph-image
+// Dynamic social preview image: https://www.deviq.online/opengraph-image
 // 1200x630, edge-rendered, no static asset to maintain.
 
 export const runtime = "edge";
@@ -61,7 +61,7 @@ export default async function Image() {
               fontWeight: 700,
             }}
           >
-            deviq.online
+            www.deviq.online
           </div>
           <div style={{ color: "#A3A3A3" }}>Free · No signup to try</div>
         </div>

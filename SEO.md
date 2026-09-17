@@ -1,6 +1,12 @@
 # DevIQ SEO Documentation
 
-Production domain: **https://deviq.online**
+Production domain: **https://www.deviq.online**
+
+> Canonical host is `www`. The apex (`deviq.online`) must 301-redirect to
+> `https://www.deviq.online` at the DNS/hosting layer, and `www.deviq.online`
+> must actually serve the site — otherwise canonicals, sitemap, and OG URLs
+> will point at a host that doesn't resolve. `public/CNAME` and DNS are the
+> deployment-side pieces of this (not changed in code).
 
 ## 1. SEO architecture
 
@@ -66,7 +72,7 @@ new intents with unique content.
 ## 5. Canonical strategy
 
 - Every indexable page sets `alternates.canonical` to its absolute HTTPS
-  production URL with no query params (`https://deviq.online/<path>`).
+  production URL with no query params (`https://www.deviq.online/<path>`).
 - Share links (`?gh=&lc=&cf=`) are client-side only and never canonicalized or
   submitted anywhere.
 
@@ -113,11 +119,11 @@ Homepage (/)
 
 ## 9. Google Search Console setup
 
-1. Add property `https://deviq.online/` (URL prefix or domain).
+1. Add property `https://www.deviq.online/` (URL prefix or domain).
 2. Verify via meta tag: set `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION` env var to the
    token (picked up automatically by `layout.tsx` → no hard-coded secrets).
    Same for Bing via `NEXT_PUBLIC_BING_SITE_VERIFICATION`.
-3. Submit sitemap: `https://deviq.online/sitemap.xml`.
+3. Submit sitemap: `https://www.deviq.online/sitemap.xml`.
 4. Request indexing for `/` + the 5 landing pages + `/blog`.
 5. Monitor Coverage (soft-404s should be ~zero), Enhancements (FAQ/Article), and
    Core Web Vitals.

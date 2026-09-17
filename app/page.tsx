@@ -6198,7 +6198,7 @@ export default function Page() {
           {page === "home" && (
             <article className="fu" itemScope itemType="https://schema.org/WebApplication">
               <meta itemProp="name" content="DevIQ" />
-              <meta itemProp="url" content="https://deviq.online" />
+              <meta itemProp="url" content="https://www.deviq.online" />
               <meta itemProp="applicationCategory" content="DeveloperApplication" />
               <section style={{ padding: isMobile ? "64px 0 48px" : "112px 0 80px", borderBottom: `1px solid ${tk.border}`, marginBottom: 48 }}>
                 <div style={{ display: "grid", gridTemplateColumns: isMobile || isTablet ? "1fr" : "minmax(0,1fr) 420px", gap: isMobile ? 22 : 30, alignItems: "center" }}>

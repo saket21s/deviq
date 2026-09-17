@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 import { SITE_URL, PUBLIC_PAGES } from "@/lib/seo";
 
-// Dynamic XML sitemap: https://deviq.online/sitemap.xml
+// Dynamic XML sitemap: https://www.deviq.online/sitemap.xml
 // Only public, indexable, server-rendered pages. Auth, API, dashboard
 // state, and OAuth callback routes are intentionally excluded.
 

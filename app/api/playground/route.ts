@@ -12,7 +12,7 @@ const GODBOLT = process.env.GODBOLT_API_URL || "https://godbolt.org";
 const HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
-  "User-Agent": "DevIQ-Playground/1.0 (+https://deviq.online)",
+  "User-Agent": "DevIQ-Playground/1.0 (+https://www.deviq.online)",
 };
 
 // Languages executed remotely via Godbolt. `patterns` are tried in order;
