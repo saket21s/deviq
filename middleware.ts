@@ -10,19 +10,30 @@ export function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const segment = pathname.split('/')[1];
 
+  const applyHsts = (res: NextResponse) => {
+    // HSTS only on real HTTPS traffic — never on localhost/dev (would brick
+    // local http) and never behind an http terminator.
+    const proto = request.headers.get('x-forwarded-proto') || request.nextUrl.protocol.replace(':', '');
+    const host = request.headers.get('host') || '';
+    if (proto === 'https' && host !== 'localhost' && !host.startsWith('127.') && !host.startsWith('192.168.') && !host.startsWith('10.')) {
+      res.headers.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    }
+    return res;
+  };
+
   // Auth callback pages are transient OAuth handlers — never index them.
   if (segment === 'auth') {
     const res = NextResponse.next();
     res.headers.set('X-Robots-Tag', 'noindex, nofollow');
-    return res;
+    return applyHsts(res);
   }
 
   // If it's an SPA route, rewrite to the root page so page.tsx handles it
   if (SPA_ROUTES.has(segment)) {
-    return NextResponse.rewrite(new URL('/', request.url));
+    return applyHsts(NextResponse.rewrite(new URL('/', request.url)));
   }
 
-  return NextResponse.next();
+  return applyHsts(NextResponse.next());
 }
 
 export const config = {

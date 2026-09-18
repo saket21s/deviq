@@ -7,18 +7,39 @@ const BACKEND = RAW_BACKEND.includes("developer-portfolio-backend-bu76")
 
 const METHODS_WITH_BODY = ["POST", "PUT", "PATCH"];
 
+// The proxy exists ONLY so the browser playground can reach the execution
+// backend on static hosts. It must never become an open relay: only the
+// execution API paths are forwarded, everything else is rejected here.
+const MAX_PROXY_BODY_BYTES = 1_000_000;
+
+function isAllowedProxyPath(segments: string[]): boolean {
+  if (!segments || segments.length === 0) return false;
+  const first = (segments[0] || "").toLowerCase();
+  if (first === "execute" || first === "languages") return segments.length === 1;
+  if (first === "exec") return true;
+  return false;
+}
+
 async function handler(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   try {
     const { path } = await params;
+    if (!isAllowedProxyPath(path || [])) {
+      return NextResponse.json({ error: "proxy path not allowed" }, { status: 403 });
+    }
     const qs = req.nextUrl.searchParams.toString();
     const url = `${BACKEND}/${path.join("/")}${qs ? `?${qs}` : ""}`;
 
     const headers: Record<string, string> = {};
     req.headers.forEach((v, k) => {
-      if (["authorization", "x-user-email", "content-type"].includes(k)) {
+      if (["authorization", "content-type"].includes(k)) {
         headers[k] = v;
       }
     });
+
+    const contentLength = req.headers.get("content-length");
+    if (contentLength && Number(contentLength) > MAX_PROXY_BODY_BYTES) {
+      return NextResponse.json({ error: "request body too large" }, { status: 413 });
+    }
 
     const fetchOpts: RequestInit = { method: req.method, headers };
     if (METHODS_WITH_BODY.includes(req.method)) {

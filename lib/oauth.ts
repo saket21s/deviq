@@ -40,10 +40,19 @@ export interface ExchangeResult {
 // ─── State helpers ───────────────────────────────────────────────────────────
 
 function generateState(): string {
-  return (
-    Math.random().toString(36).slice(2) +
-    Math.random().toString(36).slice(2)
-  );
+  // Cryptographically strong CSRF token (OAuth state must be unpredictable).
+  try {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    // Non-secure fallback (should never happen in browsers).
+    return (
+      Math.random().toString(36).slice(2) +
+      Math.random().toString(36).slice(2) +
+      Date.now().toString(36)
+    );
+  }
 }
 
 function saveStateForProvider(state: string, provider: string): void {
@@ -356,10 +365,8 @@ export function storeAuthSession(user: OAuthUser, token?: string): void {
               (u) => ((u?.email as string) || "").toLowerCase() !== email.toLowerCase()
             )
           : [];
-        const existing = (Array.isArray(users) ? users : []).find(
-          (u) => ((u?.email as string) || "").toLowerCase() === email.toLowerCase()
-        ) as { password?: string } | undefined;
-        rest.push({ name, email, password: existing?.password || "", avatar, provider });
+        // Never persist passwords in the browser.
+        rest.push({ name, email, avatar, provider });
         localStorage.setItem(USERS_KEY, JSON.stringify(rest));
       } catch {
         // user-cache write is best-effort only

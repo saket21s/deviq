@@ -23,6 +23,15 @@ const CodeEditor = dynamic(() => import("./CodeEditor"), {
 });
 
 // Minimal theme shape — compatible with DevIQ's Theme objects in app/page.tsx
+/** Attach the session token (if any) so the execution backend can authorize. */
+function execAuthHeaders(): Record<string, string> {
+  try {
+    const t = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch {
+    return {};
+  }
+}
 export interface PlaygroundTheme {
   bg: string;
   bgAlt: string;
@@ -786,7 +795,7 @@ export default function PlaygroundPage({
         const url = base === "/api/proxy" ? `${base}/exec${path}` : `${base}/exec${path}`;
         const r = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...execAuthHeaders() },
           body: JSON.stringify(body),
           signal: ctrl.signal,
           ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
@@ -1021,6 +1030,7 @@ export default function PlaygroundPage({
                   : `${base}/exec/poll/${sid}?so=${so}&se=${se}`;
               const resp = await fetch(url, {
                 signal: ctrl.signal,
+                headers: { ...execAuthHeaders() },
                 ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),
               });
               const ct = resp.headers.get("content-type") || "";
@@ -1088,7 +1098,7 @@ export default function PlaygroundPage({
         const payload = JSON.stringify({ session_id: s.id });
         void fetch("/api/proxy/exec/kill", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...execAuthHeaders() },
           body: payload,
           keepalive: true,
         })
@@ -1256,7 +1266,7 @@ export default function PlaygroundPage({
             const url = base === "/api/proxy" ? `${base}${path}` : `${base}${path}`;
             r = await fetch(url, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: { "Content-Type": "application/json", ...execAuthHeaders() },
               body: JSON.stringify({ language, code, stdin: stdinStr, filename, timeout: 15 }),
               signal: ctrl.signal,
               ...(base.startsWith("http") ? { mode: "cors" as RequestMode } : {}),

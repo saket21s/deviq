@@ -9,6 +9,31 @@ export const maxDuration = 60;
 // Execution is backed by Compiler Explorer (Godbolt) — free, no API key.
 // https://godbolt.org/api/docs
 const GODBOLT = process.env.GODBOLT_API_URL || "https://godbolt.org";
+
+// In-memory per-IP rate limit for this relay (protects Godbolt quota and
+// local compute; authenticated backend exec has its own server-side limits).
+const PLAYGROUND_BUCKET = new Map<string, number[]>();
+const PLAYGROUND_MAX = 60;
+const PLAYGROUND_WINDOW_MS = 60 * 60 * 1000;
+
+function playgroundRateLimited(req: NextRequest): boolean {
+  try {
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+    const now = Date.now();
+    const hits = (PLAYGROUND_BUCKET.get(ip) || []).filter((t) => t > now - PLAYGROUND_WINDOW_MS);
+    if (hits.length >= PLAYGROUND_MAX) {
+      PLAYGROUND_BUCKET.set(ip, hits);
+      return true;
+    }
+    hits.push(now);
+    PLAYGROUND_BUCKET.set(ip, hits);
+    if (PLAYGROUND_BUCKET.size > 5000) PLAYGROUND_BUCKET.clear();
+    return false;
+  } catch {
+    return false;
+  }
+}
 const HEADERS = {
   "Content-Type": "application/json",
   Accept: "application/json",
@@ -297,6 +322,12 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (playgroundRateLimited(req)) {
+    return NextResponse.json(
+      { error: "Too many executions, please slow down" },
+      { status: 429 }
+    );
+  }
   let body: { language?: string; code?: string; stdin?: string; filename?: string };
   try {
     body = await req.json();

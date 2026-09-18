@@ -33,9 +33,7 @@ import CodeReviewPage from "@/components/CodeReviewPage";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
-// Secrets removed - these operations should be done via backend API
-// const GITHUB_TOKEN = process.env.NEXT_PUBLIC_GITHUB_TOKEN ?? "";
-// const GROQ_KEY = process.env.NEXT_PUBLIC_GROQ_API_KEY ?? "";
+// Secrets must never live in client code — all data flows via the backend API.
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 const GITHUB_CLIENT_ID = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID ?? "";
 const LINKEDIN_CLIENT_ID = process.env.NEXT_PUBLIC_LINKEDIN_CLIENT_ID ?? "";
@@ -161,7 +159,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const USERS_KEY = "deviq_users";
 const SESSION_KEY = "deviq_session";
 const PROFILE_KEY = "deviq_profile";
-interface StoredUser { name: string; email: string; password: string; avatar?: string; provider?: string; }
+interface StoredUser { name: string; email: string; avatar?: string; provider?: string; }
 interface AnalysisRecord {
   id: string; date: string; github?: string; leetcode?: string; codeforces?: string;
   score: number; ghStars?: number; ghRepos?: number; ghLang?: string;
@@ -201,10 +199,27 @@ interface UserProfile {
   solvedProblems?: SolvedProblem[]; weakCategories?: WeakCategory[]; lastPracticeProblem?: LeetCodeProblem;
   companyTracking?: { [companySlug: string]: string[] }; // slug -> array of solved problem slugs
 }
-function getUsers(): StoredUser[] { try { return JSON.parse(localStorage.getItem(USERS_KEY) || "[]"); } catch { return []; } }
+function getUsers(): StoredUser[] {
+  try {
+    const users = JSON.parse(localStorage.getItem(USERS_KEY) || "[]");
+    if (!Array.isArray(users)) return [];
+    // One-time scrub: drop any legacy plaintext passwords, then persist clean.
+    let scrubbed = false;
+    const clean = users.map((u: any) => {
+      if (u && typeof u === "object" && "password" in u) {
+        scrubbed = true;
+        const { password: _dropped, ...rest } = u;
+        return rest;
+      }
+      return u;
+    });
+    if (scrubbed) {
+      try { localStorage.setItem(USERS_KEY, JSON.stringify(clean)); } catch { /* ignore */ }
+    }
+    return clean;
+  } catch { return []; }
+}
 function saveUser(u: StoredUser) { const users = getUsers().filter(x => x.email.toLowerCase() !== u.email.toLowerCase()); users.push(u); localStorage.setItem(USERS_KEY, JSON.stringify(users)); }
-function findUser(email: string, password: string): StoredUser | null { return getUsers().find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password) ?? null; }
-function emailExists(email: string): boolean { return getUsers().some(u => u.email.toLowerCase() === email.toLowerCase()); }
 function saveSession(u: AuthUser) { localStorage.setItem(SESSION_KEY, JSON.stringify(u)); }
 function loadSession(): AuthUser | null { try { const s = localStorage.getItem(SESSION_KEY); return s ? JSON.parse(s) : null; } catch { return null; } }
 function clearSession() {
@@ -277,13 +292,53 @@ const BACKEND = resolveBackend();
 
 function normalizeAvatarUrl(url?: string): string | undefined {
   const raw = (url || "").trim();
-  if (!raw) return undefined;
-  if (/^(https?:|data:|blob:)/i.test(raw)) return raw;
-  try {
-    return new URL(raw, BACKEND).toString();
-  } catch {
-    return raw;
+  if (!raw || raw.length > 2000) return undefined;
+  if (/[\x00-\x1f\x7f]/.test(raw)) return undefined;
+  const lower = raw.toLowerCase();
+  // Block dangerous schemes outright (javascript:, data:text/html, vbscript:, …).
+  if (/^(javascript|vbscript|file|ftp):/i.test(raw)) return undefined;
+  if (lower.startsWith("data:")) {
+    // Only raster images — never SVG/HTML, which can carry scripts.
+    if (/^data:image\/(png|jpeg|gif|webp);base64,/i.test(raw)) return raw;
+    return undefined;
   }
+  if (lower.startsWith("https://") || lower.startsWith("http://") || lower.startsWith("blob:")) return raw;
+  if (raw.startsWith("/")) {
+    try {
+      const u = new URL(raw, BACKEND);
+      if (u.protocol === "http:" || u.protocol === "https:") return u.toString();
+    } catch { /* fall through */ }
+    return undefined;
+  }
+  return undefined;
+}
+
+const TRUSTED_LINK_HOSTS = new Set(["github.com", "leetcode.com", "www.leetcode.com", "codeforces.com"]);
+
+/** Allow-listed outbound links (API-derived URLs are untrusted input). */
+function safeExternalHref(raw?: string): string | undefined {
+  const u = (raw || "").trim();
+  if (!u || u.length > 2000 || /[\x00-\x1f\x7f]/.test(u)) return undefined;
+  try {
+    const parsed = new URL(u);
+    if ((parsed.protocol === "https:" || parsed.protocol === "http:") &&
+        TRUSTED_LINK_HOSTS.has(parsed.hostname.toLowerCase())) {
+      return parsed.toString();
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** User-typed website URLs: block dangerous schemes, assume https. */
+function safeWebsiteHref(raw?: string): string | undefined {
+  const w = (raw || "").trim();
+  if (!w || w.length > 500 || /[\x00-\x1f\x7f]/.test(w)) return undefined;
+  if (/^(javascript|data|vbscript|file|ftp):/i.test(w)) return undefined;
+  const lower = w.toLowerCase();
+  if (lower.startsWith("http://") || lower.startsWith("https://")) return w;
+  return `https://${w}`;
 }
 
 function coerceAuthUser(payload: any, fallback?: Partial<AuthUser>): AuthUser {
@@ -322,11 +377,9 @@ function enrichAuthUser(base: AuthUser): AuthUser {
 function cacheAuthUser(user: AuthUser) {
   const normalized = enrichAuthUser(user);
   if (!normalized.email) return;
-  const existing = getUsers().find(u => (u.email || "").toLowerCase() === normalized.email.toLowerCase());
   saveUser({
     name: normalized.name,
     email: normalized.email,
-    password: existing?.password || "",
     avatar: normalized.avatar,
     provider: normalized.provider,
   });
@@ -359,10 +412,12 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
   }
 
   const base = BACKEND;
-  console.log(`🌐 API Request: ${base}${path}`, {
-    method: opts.method || 'GET',
-    hasAuthToken: !!authToken
-  });
+  if (process.env.NODE_ENV === "development") {
+    console.log(`🌐 API Request: ${base}${path}`, {
+      method: opts.method || 'GET',
+      hasAuthToken: !!authToken
+    });
+  }
 
   try {
     const r = await fetch(`${base}${path}`, opts);
@@ -374,7 +429,8 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
       const suppress401 = r.status === 401 && (
         path.includes('/auth/me') ||
         path.includes('/profile') ||
-        path.includes('/sync/profile')
+        path.includes('/sync/profile') ||
+        path.includes('/accounts/')
       );
       const suppressLogout = path.includes('/auth/logout') && (r.status === 400 || r.status === 401);
       if (!suppress401 && !suppressLogout) {
@@ -402,53 +458,31 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
 }
 
 async function apiSignup(name: string, email: string, password: string, avatar?: string, provider?: string): Promise<AuthUser> {
-  try {
-    const remote = await serverRequest('/auth/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email, password, avatar, provider }),
-    });
-    const merged = enrichAuthUser(coerceAuthUser(remote, { name, email, avatar, provider: normalizeProvider(provider) }));
-    cacheAuthUser(merged);
-    return merged;
-  } catch (err) {
-    // fallback to localStorage
-    if (!emailExists(email)) {
-      const user = { name, email, password, avatar, provider };
-      saveUser(user);
-      saveSession({ name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) });
-      return { name, email, avatar, provider: (provider as "google" | "github" | "email" | undefined) };
-    } else {
-      throw new Error('Email already exists (local)');
-    }
-  }
+  // No local fallback: passwords must never be persisted in the browser.
+  const remote = await serverRequest('/auth/signup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, email, password, avatar, provider }),
+  });
+  const merged = enrichAuthUser(coerceAuthUser(remote, { name, email, avatar, provider: normalizeProvider(provider) }));
+  cacheAuthUser(merged);
+  return merged;
 }
 
 async function apiLogin(email: string, password: string): Promise<AuthUser> {
-  try {
-    const remote = await serverRequest('/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    // Store auth token in localStorage for use in popups
-    if ((remote as any)?.access_token) {
-      localStorage.setItem("auth_token", (remote as any).access_token);
-      console.log('✅ Auth token stored in localStorage');
-    }
-    const merged = enrichAuthUser(coerceAuthUser(remote, { email, provider: "email" }));
-    cacheAuthUser(merged);
-    return merged;
-  } catch (err) {
-    // fallback to localStorage
-    const user = findUser(email, password);
-    if (user) {
-      saveSession({ name: user.name, email: user.email, avatar: user.avatar, provider: (user.provider as "google" | "github" | "email" | undefined) });
-      return { name: user.name, email: user.email, avatar: user.avatar, provider: (user.provider as "google" | "github" | "email" | undefined) };
-    } else {
-      throw new Error('Invalid email or password (local)');
-    }
+  // No local fallback: passwords must never be persisted in the browser.
+  const remote = await serverRequest('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  // Store auth token in localStorage for use in popups
+  if ((remote as any)?.access_token) {
+    localStorage.setItem("auth_token", (remote as any).access_token);
   }
+  const merged = enrichAuthUser(coerceAuthUser(remote, { email, provider: "email" }));
+  cacheAuthUser(merged);
+  return merged;
 }
 
 async function apiOAuth(user: { name: string; email: string; avatar?: string; provider?: string; }): Promise<AuthUser> {
@@ -469,7 +503,6 @@ async function apiOAuth(user: { name: string; email: string; avatar?: string; pr
     // Store auth token in localStorage for use in popups
     if ((remote as any)?.access_token) {
       localStorage.setItem("auth_token", (remote as any).access_token);
-      console.log('✅ Auth token stored in localStorage');
     }
     const merged = enrichAuthUser(coerceAuthUser(remote, { ...user, provider: normalizeProvider(user.provider) }));
     cacheAuthUser(merged);
@@ -515,7 +548,6 @@ async function apiGmailLogin(user?: { name?: string; email?: string; avatar?: st
     // Store auth token in localStorage for use in popups
     if (payload?.access_token) {
       localStorage.setItem("auth_token", payload.access_token);
-      console.log('✅ Auth token stored in localStorage');
     }
 
 
@@ -544,16 +576,16 @@ async function apiFetchSession(): Promise<AuthUser | null> {
     }
     return merged;
   } catch (err: any) {
-    // If backend rejects with 401, check if we have a token
+    // 401 = the server read our token and rejected it (stale/invalid/expired).
+    // Drop local auth entirely so the mandatory login window reappears for a
+    // fresh sign-in. Anything else (offline/transient) keeps the local cache.
     if (err?.status === 401) {
-      const hasToken = typeof window !== 'undefined' && localStorage.getItem('auth_token');
-      if (hasToken) {
-        // Token exists but is invalid - clear it
-        console.warn('🔒 Token is invalid or expired - clearing auth token');
+      try {
         localStorage.removeItem('auth_token');
-      }
-      // Return local session as fallback (allows offline mode)
-      return loadSession();
+        localStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(USER_KEY);
+      } catch { /* ignore */ }
+      return null;
     }
     // network / transient issue fallback
     return loadSession();
@@ -669,7 +701,6 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
     lastPracticeProblem: p.lastPracticeProblem,
     companyTracking: p.companyTracking || {},
   };
-  console.log('🔧 Payload prepared:', { displayName: payload.displayName, bio: payload.bio, website: payload.website, location: payload.location });
   return payload;
 }
 
@@ -683,17 +714,12 @@ async function apiGetProfile(): Promise<UserProfile> {
       throw new Error('NOT_MODIFIED'); // Signal to caller to use current data
     }
     
-    console.log('📥 Raw backend response:', remote);
-    console.log('📥 Extracted website from response:', remote?.website);
-    console.log('📥 Extracted location from response:', remote?.location);
     console.log('📥 Loaded profile from backend:', {
-      recentAnalyses: remote.recentAnalyses?.length || 0,
-      website: remote?.website,
-      location: remote?.location
+      recentAnalyses: remote.recentAnalyses?.length || 0
     });
     return normalizeUserProfile(remote);
   } catch (err: any) {
-    console.error('❌ Failed to load profile from backend:', err);
+    console.error('❌ Failed to load profile from backend:', err?.message || err);
     if (err?.message?.includes('Invalid token') || err?.message?.includes('Unauthorized')) {
       console.error('🔑 Token issue detected. You may need to log in again.');
     }
@@ -720,14 +746,7 @@ async function apiSaveProfile(p: UserProfile, strict = false): Promise<UserProfi
 // Helper to sync profile to both backend and localStorage
 async function syncProfile(email: string, p: UserProfile, strict = false): Promise<UserProfile> {
   const payload = toBackendProfilePayload(p);
-  console.log('🔄 Syncing profile to backend:', {
-    email,
-    bio: payload.bio,
-    website: payload.website,
-    location: payload.location,
-    recentAnalyses: p.recentAnalyses?.length || 0
-  });
-  
+
   // Save to localStorage immediately
   saveProfile(email, p);
   
@@ -740,25 +759,11 @@ async function syncProfile(email: string, p: UserProfile, strict = false): Promi
     });
     // Extract user data from response (it has {message, user} structure)
     const userData = remote.user || remote;
-    console.log('📊 Backend response:', {
-      user: userData,
-      hasWebsite: !!userData.website,
-      hasLocation: !!userData.location,
-      website: userData.website,
-      location: userData.location
-    });
     const updated = normalizeUserProfile(userData, p);
-    console.log('✅ Profile synced successfully:', {
-      bio: updated.bio,
-      website: updated.website,
-      location: updated.location,
-      recentAnalyses: updated.recentAnalyses?.length || 0
-    });
     // Update localStorage with backend response
     saveProfile(email, updated);
     return updated;
   } catch (err) {
-    console.error('❌ Sync failed, trying fallback:', err);
     if (strict) {
       throw err;
     }
@@ -969,7 +974,7 @@ function RecentSolvedList({ title, handle, items, tk, accent, accentLight, accen
           {items.map((it, i) => (
             <a
               key={`${it.url}-${i}`}
-              href={it.url}
+              href={safeExternalHref(it.url)}
               target="_blank"
               rel="noopener noreferrer"
               style={{
@@ -1374,7 +1379,7 @@ function RepoTreePopup({ owner, repoName, repoUrl, tk, openUp, maxH, attempt, on
           <span style={{ fontSize: 11, color: tk.text3 }}>File structure</span>
         )}
         <span style={{ flex: 1 }} />
-        <a href={repoUrl} target="_blank" rel="noopener noreferrer"
+        <a href={safeExternalHref(repoUrl)} target="_blank" rel="noopener noreferrer"
           style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: tk.accentFg, background: tk.accent, borderRadius: 8, padding: "7px 14px", textDecoration: "none", whiteSpace: "nowrap" as const }}>
           Open on GitHub
           <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
@@ -1478,7 +1483,7 @@ function RepoCard({ repo, owner, tk, delay = 0 }: { repo: NormalizedRepo; owner:
       style={{ animationDelay: `${Math.min(delay, 8) * 40}ms`, position: "relative", minWidth: 0, zIndex: showPreview ? 40 : undefined }}
     >
     <a
-      href={repo.url} target="_blank" rel="noopener noreferrer"
+      href={safeExternalHref(repo.url)} target="_blank" rel="noopener noreferrer"
       onFocus={() => setHov(true)} onBlur={() => setHov(false)}
       style={{
         display: "flex", flexDirection: "column", gap: 10,
@@ -1732,26 +1737,6 @@ function RepositoriesSection({ repos, gh, tk, isMobile }: { repos: RepoItem[]; g
 ───────────────────────────────────────────────── */
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
-const LEVEL_MAP: Record<string, number> = { NONE: 0, FIRST_QUARTILE: 1, SECOND_QUARTILE: 2, THIRD_QUARTILE: 3, FOURTH_QUARTILE: 4 };
-const GQL = `query($login:String!){user(login:$login){contributionsCollection{contributionCalendar{totalContributions weeks{contributionDays{date contributionCount contributionLevel}}}}}}`;
-
-async function fetchHeatmap(username: string, token: string): Promise<HeatmapData> {
-  const r = await fetch("https://api.github.com/graphql", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}`, "User-Agent": "DevIQ/1.0" }, body: JSON.stringify({ query: GQL, variables: { login: username } }) });
-  if (!r.ok) throw new Error(`GitHub API ${r.status}`);
-  const b = await r.json();
-  if (b.errors?.length) throw new Error(b.errors[0].message);
-  if (!b.data?.user) throw new Error(`User "${username}" not found`);
-  const cal = b.data.user.contributionsCollection.contributionCalendar;
-  const contributions: Contribution[] = [];
-  for (const w of cal.weeks) for (const d of w.contributionDays) contributions.push({ date: d.date, count: d.contributionCount, level: LEVEL_MAP[d.contributionLevel] ?? 0 });
-  contributions.sort((a, b) => a.date.localeCompare(b.date));
-  let longest = 0, temp = 0;
-  for (const d of contributions) { if (d.count > 0) { temp++; longest = Math.max(longest, temp); } else temp = 0; }
-  const today = new Date().toISOString().split("T")[0];
-  const days = contributions.at(-1)?.date === today && contributions.at(-1)?.count === 0 ? contributions.slice(0, -1) : contributions;
-  let current = 0; for (let i = days.length - 1; i >= 0; i--) { if (days[i].count > 0) current++; else break; }
-  return { contributions, total_last_year: cal.totalContributions, current_streak: current, longest_streak: longest };
-}
 
 function buildGrid(contributions: Contribution[]) {
   const map: Record<string, Contribution> = {};
@@ -1820,22 +1805,8 @@ function ContributionHeatmap({ username, tk, dark }: { username: string; tk: The
 
         if (!cancelled) setHdata(body as HeatmapData);
       } catch (backendErr: unknown) {
-        const githubToken = process.env.NEXT_PUBLIC_GITHUB_TOKEN || "";
-
-        if (githubToken) {
-          try {
-            const fallback = await fetchHeatmap(username, githubToken);
-            if (!cancelled) setHdata(fallback);
-            return;
-          } catch (fallbackErr: unknown) {
-            const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-            if (!cancelled) {
-              setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: msg });
-            }
-            return;
-          }
-        }
-
+        // No client-side token fallback: a PAT must never live in the browser.
+        // Surface the backend error (already user-friendly, never raw dumps).
         const msg = backendErr instanceof Error ? backendErr.message : String(backendErr);
         if (!cancelled) {
           setHdata({ contributions: [], total_last_year: 0, current_streak: 0, longest_streak: 0, error: msg });
@@ -1931,7 +1902,7 @@ function DeveloperCard({ data, gh, lc, cf, tk, dark }: { data: ResultData; gh: s
       await navigator.clipboard.writeText(`${shareText}\n\n${profileUrl}`);
       alert("LinkedIn share dialog opened! Post text copied to clipboard for easy sharing.");
     } catch (error) {
-      console.error("LinkedIn share failed:", error);
+      console.error("LinkedIn share failed:", error instanceof Error ? error.message : 'share failed');
       alert("Failed to share to LinkedIn. Please try again.");
     } finally {
       setLinkedinSharing(false);
@@ -2147,7 +2118,7 @@ Combined DevIQ Score: ${data.combined_score}/100`;
       setTranslated(t => ({ ...t, [mode]: data.result }));
       setShowHindi(s => ({ ...s, [mode]: true }));
     } catch (e) {
-      console.error('Translation error:', e);
+      console.error('Translation error:', e instanceof Error ? e.message : 'translation failed');
     } finally {
       setTranslating(false);
     }
@@ -2403,7 +2374,7 @@ function AuthModal({ mode, tk, onAuth, onSwitchMode }: {
       }
       // User will be redirected, so no need for further handling here
     } catch (err: any) {
-      console.error(`${provider} auth error:`, err);
+      console.error(`${provider} auth error:`, err?.message || 'authentication failed');
       setGlobalError(`${provider === "google" ? "Google" : "GitHub"} authentication failed.`);
       setOauthLoading(null);
     }
@@ -3157,7 +3128,7 @@ function ProfilePage({
               <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: tk.bgAlt, border: `1px solid ${tk.border}`, color: tk.text3, textTransform: "capitalize" as const }}>via {user.provider || "email"}</span>
               <span style={{ fontSize: 11, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>Joined {joinDate}</span>
               {p?.location && <span style={{ fontSize: 11, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg>{p.location}</span>}
-              {p?.website && <a href={p.website.startsWith("http") ? p.website : `https://${p.website}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: tk.blue, display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>{p.website.replace(/^https?:\/\//, "")}</a>}
+              {p?.website && safeWebsiteHref(p.website) && <a href={safeWebsiteHref(p.website)!} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: tk.blue, display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>{p.website.replace(/^https?:\/\//, "")}</a>}
             </div>
             {p?.bio && <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.65, maxWidth: 500, margin: 0 }}>{p.bio}</p>}
           </div>
@@ -3365,7 +3336,7 @@ function ProfilePage({
               <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                 {user.email && !user.email.endsWith("@github.oauth") && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 7l10 8 10-8" /></svg><span style={{ fontSize: 12, color: tk.text2 }}>{user.email}</span></div>}
                 {p?.location && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" /></svg><span style={{ fontSize: 12, color: tk.text2 }}>{p.location}</span></div>}
-                {p?.website && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg><a href={p.website.startsWith("http") ? p.website : `https://${p.website}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: tk.blue, textDecoration: "none" }}>{p.website.replace(/^https?:\/\//, "")}</a></div>}
+                {p?.website && safeWebsiteHref(p.website) && <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg><a href={safeWebsiteHref(p.website)!} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: tk.blue, textDecoration: "none" }}>{p.website.replace(/^https?:\/\//, "")}</a></div>}
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}><svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg><span style={{ fontSize: 12, color: tk.text2 }}>Joined {joinDate}</span></div>
               </div>
             </div>
@@ -3734,7 +3705,7 @@ function ChatPage({ user, profile, tk, isMobile, messages, setMessages }: {
 
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
-      console.error("Chat error:", error);
+      console.error("Chat error:", error instanceof Error ? error.message : 'chat failed');
       setFailedPrompt(text);
       const errorMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
@@ -4028,7 +3999,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
         onProfileSave(updatedProfile);
       }
     } catch (error) {
-      console.error("Error analyzing LeetCode data:", error);
+      console.error("Error analyzing LeetCode data:", error instanceof Error ? error.message : 'analysis failed');
       alert(`Error: ${error instanceof Error ? error.message : "Failed to analyze LeetCode data"}`);
     } finally {
       setLoading(false);
@@ -4151,7 +4122,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
         throw new Error(`No problems available for this company yet.`);
       }
     } catch (e: any) {
-      console.error("Company fetch error:", e);
+      console.error("Company fetch error:", e?.message || 'fetch failed');
       const message = e instanceof TypeError && e.message === "Failed to fetch"
         ? "Could not reach the server. Please check your internet connection."
         : e?.message || "Failed to load problems. Please try again.";
@@ -4647,9 +4618,7 @@ function SettingsPage({
   const [privacy, setPrivacy] = useState(() => { try { const s = localStorage.getItem(PRIVACY_KEY); return s ? JSON.parse(s) : { publicProfile: true, showEmail: false, analytics: true }; } catch { return { publicProfile: true, showEmail: false, analytics: true }; } });
 
   const handleSaveAccount = async () => {
-    console.log('💾 Save button clicked. Current state:', { displayName, bio, website, location });
     const updated: UserProfile = { ...(p || { joinedAt: new Date().toISOString(), analysesRun: 0, comparisonsRun: 0, aiInsightsRun: 0 }), displayName: displayName.trim() || user.name, bio: bio.trim(), website: website.trim(), location: location.trim() };
-    console.log('📤 Updated profile object:', { displayName: updated.displayName, bio: updated.bio, website: updated.website, location: updated.location });
     setSavingAccount(true);
     setInternalAccountSaveMessage(null);
     try {
@@ -4695,9 +4664,7 @@ function SettingsPage({
         setTimeout(() => setSyncMessage(null), 4000);
         return;
       }
-      console.error('Pull error details:', err);
-      console.error('Pull error message:', err?.message);
-      console.error('Pull error stack:', err?.stack);
+      console.error('Pull failed:', err?.message || 'unknown error');
       const errorMsg = err?.message || String(err);
       
       // Check for authentication errors - try to re-authenticate
@@ -4707,8 +4674,9 @@ function SettingsPage({
         const session = loadSession();
         if (session?.email) {
           try {
-            const refreshed = await apiOAuth({ name: session.name || '', email: session.email, avatar: session.avatar, provider: session.provider || 'google' });
-            if (refreshed) {
+            const refreshed = await apiOAuth({ name: session.name || '', email: session.email, avatar: session.avatar, provider: session.provider || 'google' }).catch(() => null);
+            // Retry only if re-auth actually produced a fresh token.
+            if (refreshed && localStorage.getItem('auth_token')) {
               // Retry the pull with fresh token
               await onPullLatest();
               setSyncMessage({ text: '✓ Pulled latest from cloud! Profile updated.', type: 'success' });
@@ -4828,7 +4796,7 @@ function SettingsPage({
             {[{ label: "Display Name", value: displayName, set: setDisplayName, placeholder: "Your name", desc: "How your name appears on DevIQ.", multiline: false }, { label: "Bio", value: bio, set: setBio, placeholder: "Tell us about yourself…", desc: "Short bio shown on your profile.", multiline: true }, { label: "Website", value: website, set: setWebsite, placeholder: "https://yoursite.com", desc: "Your portfolio or personal site.", multiline: false }, { label: "Location", value: location, set: setLocation, placeholder: "City, Country", desc: "Where are you based?", multiline: false }].map(field => (
               <div key={field.label} style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}` }}>
                 <label style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" as const, color: tk.text3, display: "block", marginBottom: 6 }}>{field.label}</label>
-                {field.multiline ? <textarea value={field.value} onChange={e => { console.log(`📝 ${field.label} changed to:`, e.target.value); field.set(e.target.value); }} placeholder={field.placeholder} rows={3} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", resize: "vertical" as const, boxSizing: "border-box" as const }} /> : <input value={field.value} onChange={e => { console.log(`📝 ${field.label} changed to:`, e.target.value); field.set(e.target.value); }} placeholder={field.placeholder} type="text" onKeyDown={e => e.key === "Enter" && handleSaveAccount()} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box" as const }} />}
+                {field.multiline ? <textarea value={field.value} onChange={e => { field.set(e.target.value); }} placeholder={field.placeholder} rows={3} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", resize: "vertical" as const, boxSizing: "border-box" as const }} /> : <input value={field.value} onChange={e => { field.set(e.target.value); }} placeholder={field.placeholder} type="text" onKeyDown={e => e.key === "Enter" && handleSaveAccount()} style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box" as const }} />}
                 <div style={{ fontSize: 11, color: tk.text3, marginTop: 5 }}>{field.desc}</div>
               </div>
             ))}
@@ -5088,8 +5056,19 @@ export default function Page() {
             }
           }
         } else {
-          // fallback to local storage and best-effort cookie restoration
-          if (savedUser?.provider === "google") {
+          // No usable server session. If we HAD a token, the backend rejected
+          // it (stale/invalid/expired) — wipe local auth scraps so the
+          // mandatory login window appears for a fresh sign-in. (apiFetchSession
+          // already cleared storage; this clears the in-memory state set above.)
+          // No token at all + no session = plain logged-out visitor.
+          if (hasLocalToken && !serverUser) {
+            clearAuth();
+            clearSession();
+            setUser(null);
+            setProfile(null);
+            setChatMessages([]);
+          } else if (savedUser?.provider === "google") {
+            // fallback to local storage and best-effort cookie restoration
             apiGmailLogin({ name: savedUser.name, email: savedUser.email, avatar: savedUser.avatar })
               .then((restored) => {
                 if (!restored) return;
@@ -5108,16 +5087,6 @@ export default function Page() {
         // ignore errors during init
       }
       setHydrated(true);
-      
-      // Log auth status for debugging
-      setTimeout(() => {
-        const authStatus = loadSession();
-        if (authStatus) {
-          console.log('✅ Logged in as:', authStatus.email);
-        } else {
-          console.log('❌ NOT LOGGED IN - Please click "Sign In" to authenticate');
-        }
-      }, 1000);
     };
     init();
   }, []);
@@ -5167,8 +5136,10 @@ export default function Page() {
           setProfile(latestProfile);
           saveProfile(user.email, latestProfile);
         }
-      } catch {
-        // Silently skip — offline or unauthenticated
+      } catch (err: any) {
+        // Expired/revoked token mid-session: force a clean re-login.
+        // Anything else (offline/transient): silently skip.
+        if (err?.status === 401) handleSessionExpired();
       }
     };
 
@@ -5315,7 +5286,7 @@ export default function Page() {
         const normalized = coerceAuthUser(exchangeResult.user, { provider });
         await handleLogin(normalized);
       } catch (err) {
-        console.error("OAuth completion failed:", err);
+        console.error("OAuth completion failed:", err instanceof Error ? err.message : 'unknown error');
       }
     };
 
@@ -5346,6 +5317,16 @@ export default function Page() {
     }
     apiLogout().catch(() => {});
   };
+  // Session died server-side (401: expired/revoked/invalid token) — drop all
+  // local auth state so the mandatory login window reappears for a fresh
+  // sign-in. Local profile caches are kept and reattach on next login.
+  const handleSessionExpired = useCallback(() => {
+    clearAuth();
+    clearSession();
+    setUser(null);
+    setProfile(null);
+    setChatMessages([]);
+  }, []);
   const handleProfileSave = async (updated: UserProfile) => {
     if (!user) return;
     isSyncingRef.current = true;
@@ -5398,31 +5379,11 @@ export default function Page() {
     try {
       const latestProfileRemote = await apiGetProfile();
       const latestProfile = mergeProfilePreferNonEmpty(latestProfileRemote, profile || loadProfile(user.email));
-      console.log('📥 Pulled profile data:', {
-        bio: latestProfile.bio,
-        displayName: latestProfile.displayName,
-        website: latestProfile.website,
-        location: latestProfile.location,
-        recentAnalyses: latestProfile.recentAnalyses?.length || 0
-      });
-      console.log('📥 Current profile state:', {
-        bio: profile?.bio,
-        displayName: profile?.displayName,
-        website: profile?.website,
-        location: profile?.location,
-        recentAnalyses: profile?.recentAnalyses?.length || 0
-      });
       if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
       if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
       lastPulledHashRef.current = JSON.stringify(latestProfile);
       setProfile(latestProfile);
       saveProfile(user.email, latestProfile);
-      console.log('✅ Profile state updated to:', {
-        bio: latestProfile.bio,
-        displayName: latestProfile.displayName,
-        website: latestProfile.website,
-        location: latestProfile.location
-      });
     } catch (err: any) {
       if (err?.message === 'NOT_MODIFIED') {
         console.log('📦 Profile already up to date (304)');
@@ -5555,7 +5516,12 @@ export default function Page() {
         const data = await serverRequest('/accounts/connected');
         setConnectedAccounts(data?.accounts || []);
       } catch (err) {
-        console.error('Failed to load connected accounts:', err);
+        if ((err as any)?.status === 401) {
+          // Token died mid-session — force a clean re-login.
+          handleSessionExpired();
+          return;
+        }
+        console.error('Failed to load connected accounts:', err instanceof Error ? err.message : 'unknown error');
       } finally {
         setLoadingAccounts(false);
       }
@@ -5563,12 +5529,11 @@ export default function Page() {
     loadConnectedAccounts();
   }, [user]);
 
-  // Listen for GitHub OAuth connection success
+  // Listen for GitHub OAuth connection success (same-origin messages only).
   useEffect(() => {
     const handleGitHubConnected = async (event: MessageEvent) => {
-      console.log('📨 Received message from GitHub callback:', event.data);
+      if (event.origin !== window.location.origin) return;
       if (event.data?.type === 'GITHUB_CONNECTED') {
-        console.log('✅ GitHub account connected successfully');
         setAccountSaveMessage({ text: '✓ GitHub account connected', type: 'success' });
         setTimeout(() => setAccountSaveMessage(null), 3000);
         setConnectingPlatform(null);
@@ -5577,11 +5542,10 @@ export default function Page() {
           const data = await serverRequest('/accounts/connected');
           setConnectedAccounts(data.accounts || []);
         } catch (err) {
-          console.error('Failed to reload connected accounts:', err);
+          console.error('Failed to reload connected accounts:', err instanceof Error ? err.message : 'unknown error');
         }
       } else if (event.data?.type === 'OAUTH_ERROR') {
-        console.error('❌ OAuth error:', event.data.message);
-        setAccountSaveMessage({ text: `Error: ${event.data.message}`, type: 'error' });
+        setAccountSaveMessage({ text: 'Error connecting account', type: 'error' });
         setTimeout(() => setAccountSaveMessage(null), 3000);
         setConnectingPlatform(null);
       }
@@ -5610,7 +5574,9 @@ export default function Page() {
           setConnectingPlatform(null);
           return;
         }
-        const state = Math.random().toString(36).substring(7);
+        const stateBytes = new Uint8Array(16);
+        crypto.getRandomValues(stateBytes);
+        const state = Array.from(stateBytes, (b) => b.toString(16).padStart(2, "0")).join("");
         localStorage.setItem('github_connect_state', state);
         localStorage.setItem('github_connect_action', 'connect_account');
         const redirectUri = `${window.location.origin}/auth/callback/github`;
@@ -5661,7 +5627,7 @@ export default function Page() {
           setConnectedAccounts(refreshData.accounts || []);
         }
       } catch (err: any) {
-        console.error('Failed to connect account:', err);
+        console.error('Failed to connect account:', err?.message || 'unknown error');
         const errorMsg = err.message || 'Failed to connect account';
         setAccountSaveMessage({ text: errorMsg, type: 'error' });
         setTimeout(() => setAccountSaveMessage(null), 3000);
@@ -5669,7 +5635,7 @@ export default function Page() {
         setConnectingPlatform(null);
       }
     } catch (err: any) {
-      console.error('Error in handleConnectAccount:', err);
+      console.error('Error in handleConnectAccount:', err?.message || 'unknown error');
       setAccountSaveMessage({ text: 'An unexpected error occurred', type: 'error' });
       setTimeout(() => setAccountSaveMessage(null), 3000);
       setConnectingPlatform(null);
@@ -5680,14 +5646,15 @@ export default function Page() {
     const account = connectedAccounts.find(a => a.platform === platform && a.is_active);
     if (!account) return;
 
-    const urls: Record<string, string> = {
-      github: `https://github.com/${account.platform_username}`,
-      leetcode: `https://leetcode.com/${account.platform_username}`,
-      codeforces: `https://codeforces.com/profile/${account.platform_username}`
+    const bases: Record<string, string> = {
+      github: "https://github.com/",
+      leetcode: "https://leetcode.com/",
+      codeforces: "https://codeforces.com/profile/"
     };
-
-    const url = urls[platform];
-    if (url) window.open(url, '_blank');
+    const base = bases[platform];
+    const uname = encodeURIComponent((account.platform_username || "").trim());
+    if (!base || !uname) return;
+    window.open(base + uname, '_blank', 'noopener,noreferrer');
   };
 
   const handleDisconnectAccount = async (platform: string) => {
@@ -5707,7 +5674,7 @@ export default function Page() {
       const data = await serverRequest('/accounts/connected');
       setConnectedAccounts(data?.accounts || []);
     } catch (err) {
-      console.error('Failed to disconnect account:', err);
+      console.error('Failed to disconnect account:', err instanceof Error ? err.message : 'unknown error');
       setAccountSaveMessage({ text: 'Network error', type: 'error' });
       setTimeout(() => setAccountSaveMessage(null), 3000);
     } finally {
@@ -5757,7 +5724,7 @@ export default function Page() {
           result.github.advancedAnalytics.complexRepos = complexRepos;
         }
       } catch (e) {
-        console.log("Could not calculate advanced analytics:", e);
+        console.log("Could not calculate advanced analytics");
       }
     }
     

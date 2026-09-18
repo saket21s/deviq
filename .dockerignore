@@ -20,3 +20,5 @@ out
 .next
 .turbo
 debug_sessions
+developer-portfolio-backend.env
+*.env
