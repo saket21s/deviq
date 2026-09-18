@@ -5289,7 +5289,21 @@ export default function Page() {
     window.addEventListener("popstate", onPop); return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  const [authModal, setAuthModal] = useState<"login" | "signup" | null>(null);
+  const [authModal, setAuthModal] = useState<"login" | "signup" | null>(() => {
+    // First paint: logged-out visitors see the login window immediately,
+    // before the home page. Synchronous so there is no flash of home content.
+    try {
+      if (typeof window === "undefined") return null;
+      if (localStorage.getItem(SESSION_KEY)) return null; // signed in → straight home
+      if (
+        sessionStorage.getItem(PENDING_OAUTH_KEY) ||
+        localStorage.getItem(PENDING_OAUTH_LOCAL_KEY)
+      ) return null; // OAuth return in progress → let it complete quietly
+      return "login";
+    } catch {
+      return null;
+    }
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -5389,6 +5403,7 @@ export default function Page() {
           const mergedUser = enrichAuthUser(serverUser);
           setUser(mergedUser);
           cacheAuthUser(mergedUser);
+          setAuthModal(null); // session restored → dismiss the login window
           try {
             // Load profile from backend (source of truth)
             const remoteProfile = await apiGetProfile();
