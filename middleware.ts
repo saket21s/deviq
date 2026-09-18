@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server';
 
 // All client-side SPA routes managed by React state in app/page.tsx
 const SPA_ROUTES = new Set([
-  'analyze', 'compare', 'profile', 'settings', 'history', 'following', 'chat', 'practice'
+  'analyze', 'compare', 'profile', 'settings', 'history', 'chat', 'practice'
 ]);
 
 export function middleware(request: NextRequest) {

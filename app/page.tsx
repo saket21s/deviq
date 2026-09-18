@@ -44,7 +44,7 @@ const LINKEDIN_CLIENT_ID = process.env.NEXT_PUBLIC_LINKEDIN_CLIENT_ID ?? "";
    TYPES
 ───────────────────────────────────────────────── */
 type Theme = typeof THEMES.light;
-type Page = "home" | "analyze" | "compare" | "playground" | "review" | "profile" | "settings" | "history" | "following" | "chat" | "practice";
+type Page = "home" | "analyze" | "compare" | "playground" | "review" | "profile" | "settings" | "history" | "chat" | "practice";
 interface AuthUser { name: string; email: string; avatar?: string; provider?: "google" | "github" | "email"; }
 interface ConnectedAccount {
   platform: string;
@@ -169,15 +169,6 @@ interface AnalysisRecord {
   lcSolved?: number; lcEasy?: number; lcMedium?: number; lcHard?: number;
   cfRating?: number; cfRank?: string; cfProblemsSolved?: number; cfContests?: number;
 }
-interface FollowedUser {
-  username: string; platform: "github" | "leetcode" | "codeforces";
-  lastScore?: number; lastUpdated?: string; avatar?: string;
-}
-interface Notification {
-  id: string; type: "score_change" | "new_follower"; message: string; timestamp: string;
-  data?: { username: string; oldScore: number; newScore: number; platform: string };
-  read: boolean;
-}
 interface LeetCodeProblem {
   id: string; title: string; difficulty: "Easy" | "Medium" | "Hard"; topicTags: string[];
   slugTitle: string; url?: string;
@@ -207,7 +198,6 @@ interface UserProfile {
   githubUsername?: string; leetcodeUsername?: string; codeforcesHandle?: string;
   analysesRun: number; comparisonsRun: number; aiInsightsRun: number;
   recentAnalyses?: AnalysisRecord[];
-  following?: FollowedUser[]; followers?: FollowedUser[]; notifications?: Notification[];
   solvedProblems?: SolvedProblem[]; weakCategories?: WeakCategory[]; lastPracticeProblem?: LeetCodeProblem;
   companyTracking?: { [companySlug: string]: string[] }; // slug -> array of solved problem slugs
 }
@@ -244,9 +234,6 @@ function loadProfile(email: string): UserProfile {
     comparisonsRun: 0,
     aiInsightsRun: 0,
     recentAnalyses: [],
-    following: [],
-    followers: [],
-    notifications: [],
     solvedProblems: [],
     weakCategories: [],
     companyTracking: {},
@@ -608,9 +595,6 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
     comparisonsRun: 0,
     aiInsightsRun: 0,
     recentAnalyses: [],
-    following: [],
-    followers: [],
-    notifications: [],
     solvedProblems: [],
     weakCategories: [],
   };
@@ -633,9 +617,6 @@ function normalizeUserProfile(payload: any, fallback?: UserProfile): UserProfile
     comparisonsRun: typeof source.comparisonsRun === "number" ? source.comparisonsRun : (base.comparisonsRun || 0),
     aiInsightsRun: typeof source.aiInsightsRun === "number" ? source.aiInsightsRun : (base.aiInsightsRun || 0),
     recentAnalyses: Array.isArray(source.recentAnalyses) ? source.recentAnalyses : base.recentAnalyses,
-    following: Array.isArray(source.following) ? source.following : base.following,
-    followers: Array.isArray(source.followers) ? source.followers : base.followers,
-    notifications: Array.isArray(source.notifications) ? source.notifications : base.notifications,
     solvedProblems: Array.isArray(source.solvedProblems) ? source.solvedProblems : base.solvedProblems,
     weakCategories: Array.isArray(source.weakCategories) ? source.weakCategories : base.weakCategories,
     lastPracticeProblem: source.lastPracticeProblem || base.lastPracticeProblem,
@@ -660,9 +641,6 @@ function mergeProfilePreferNonEmpty(remote: UserProfile, local?: UserProfile | n
     comparisonsRun: remote.comparisonsRun || local.comparisonsRun || 0,
     aiInsightsRun: remote.aiInsightsRun || local.aiInsightsRun || 0,
     recentAnalyses: (remote.recentAnalyses && remote.recentAnalyses.length > 0) ? remote.recentAnalyses : (local.recentAnalyses || []),
-    following: (remote.following && remote.following.length > 0) ? remote.following : (local.following || []),
-    followers: (remote.followers && remote.followers.length > 0) ? remote.followers : (local.followers || []),
-    notifications: (remote.notifications && remote.notifications.length > 0) ? remote.notifications : (local.notifications || []),
     solvedProblems: (remote.solvedProblems && remote.solvedProblems.length > 0) ? remote.solvedProblems : (local.solvedProblems || []),
     weakCategories: (remote.weakCategories && remote.weakCategories.length > 0) ? remote.weakCategories : (local.weakCategories || []),
     lastPracticeProblem: remote.lastPracticeProblem || local.lastPracticeProblem,
@@ -680,8 +658,6 @@ function toBackendProfilePayload(p: UserProfile): Record<string, any> {
     codeforces_handle: p.codeforcesHandle || "",
     profile_picture_url: p.avatar || "",
     recentAnalyses: p.recentAnalyses || [],
-    following: p.following || [],
-    notifications: p.notifications || [],
     analysesRun: p.analysesRun || 0,
     comparisonsRun: p.comparisonsRun || 0,
     aiInsightsRun: p.aiInsightsRun || 0,
@@ -712,8 +688,6 @@ async function apiGetProfile(): Promise<UserProfile> {
     console.log('📥 Extracted location from response:', remote?.location);
     console.log('📥 Loaded profile from backend:', {
       recentAnalyses: remote.recentAnalyses?.length || 0,
-      following: remote.following?.length || 0,
-      notifications: remote.notifications?.length || 0,
       website: remote?.website,
       location: remote?.location
     });
@@ -751,9 +725,7 @@ async function syncProfile(email: string, p: UserProfile, strict = false): Promi
     bio: payload.bio,
     website: payload.website,
     location: payload.location,
-    recentAnalyses: p.recentAnalyses?.length || 0,
-    following: p.following?.length || 0,
-    notifications: p.notifications?.length || 0
+    recentAnalyses: p.recentAnalyses?.length || 0
   });
   
   // Save to localStorage immediately
@@ -780,9 +752,7 @@ async function syncProfile(email: string, p: UserProfile, strict = false): Promi
       bio: updated.bio,
       website: updated.website,
       location: updated.location,
-      recentAnalyses: updated.recentAnalyses?.length || 0,
-      following: updated.following?.length || 0,
-      notifications: updated.notifications?.length || 0
+      recentAnalyses: updated.recentAnalyses?.length || 0
     });
     // Update localStorage with backend response
     saveProfile(email, updated);
@@ -893,6 +863,17 @@ function EyeIcon({ open, color = "currentColor" }: { open: boolean; color?: stri
     ? <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
     : <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>;
 }
+
+/* Mobile menu links + shared Apple system font stack for the full-screen menu. */
+const APPLE_STACK = "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif";
+const MOBILE_NAV: { id: Page; label: string }[] = [
+  { id: "home", label: "Home" },
+  { id: "analyze", label: "Analyze" },
+  { id: "compare", label: "Compare" },
+  { id: "playground", label: "Playground" },
+  { id: "chat", label: "Ask AI" },
+  { id: "practice", label: "Interview Prep" },
+];
 
 /* ─────────────────────────────────────────────────
    HOOKS
@@ -3178,16 +3159,6 @@ function ProfilePage({
               {p?.website && <a href={p.website.startsWith("http") ? p.website : `https://${p.website}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: tk.blue, display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>{p.website.replace(/^https?:\/\//, "")}</a>}
             </div>
             {p?.bio && <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.65, maxWidth: 500, margin: 0 }}>{p.bio}</p>}
-            <div style={{ display: "flex", alignItems: "center", gap: 16, marginTop: p?.bio ? 10 : 6 }}>
-              <button onClick={() => onNavigate("following")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: tk.text }}>{p?.following?.length ?? 0}</span>
-                <span style={{ fontSize: 12, color: tk.text3 }}>Following</span>
-              </button>
-              <button onClick={() => onNavigate("following")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: tk.text }}>{p?.followers?.length ?? 0}</span>
-                <span style={{ fontSize: 12, color: tk.text3 }}>Followers</span>
-              </button>
-            </div>
           </div>
           <button onClick={() => onNavigate("settings")} style={{ padding: "7px 16px", borderRadius: 7, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", fontSize: 12, fontWeight: 500, color: tk.text2, display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
             <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
@@ -3735,7 +3706,6 @@ function ChatPage({ user, profile, tk, isMobile, messages, setMessages }: {
               return `${name} [${plat}] ${typeof h.score === "number" ? h.score.toFixed(0) : "?"}pts`;
             }).join("; ")}`
           : "Recent scores: none yet",
-        `Following: ${(profile.following || []).length} developers`,
       ].join("\n") : "No profile data yet — user has not run any analysis.";
 
       const prompt = `My profile context:\n${contextLines}\n\nMy question: ${text}\n\nReply in clean, concise Markdown (short bullets, no wide tables).`;
@@ -4594,315 +4564,6 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 }
 
 /* ─────────────────────────────────────────────────
-   FOLLOWING PAGE
-───────────────────────────────────────────────── */
-function FollowingPage({ user, profile, tk, isMobile, onNavigate, onProfileSave }: {
-  user: AuthUser; profile: UserProfile | null; tk: Theme; isMobile: boolean;
-  onNavigate: (p: Page) => void; onProfileSave: (p: UserProfile) => void;
-}) {
-  const p = profile;
-  const [following, setFollowing] = useState<FollowedUser[]>(p?.following || []);
-  const [followers, setFollowers] = useState<FollowedUser[]>(p?.followers || []);
-  const [notifications, setNotifications] = useState<Notification[]>(p?.notifications || []);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<FollowedUser[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [activeTab, setActiveTab] = useState<"following" | "followers" | "notifications">("following");
-
-  useEffect(() => {
-    if (p) {
-      setFollowing(p.following || []);
-      setFollowers(p.followers || []);
-      setNotifications(p.notifications || []);
-    }
-  }, [p]);
-
-  const searchUsers = useCallback(async (query: string) => {
-    if (!query.trim()) {
-      setSearchResults([]);
-      return;
-    }
-    setIsSearching(true);
-    try {
-      // Search GitHub users (unauthenticated - rate limited)
-      const githubRes = await fetch(`https://api.github.com/search/users?q=${encodeURIComponent(query)}&per_page=5`);
-      const githubData = await githubRes.json();
-
-      const results: FollowedUser[] = [];
-      if (githubData.items) {
-        for (const item of githubData.items.slice(0, 3)) {
-          results.push({
-            username: item.login,
-            platform: "github",
-            avatar: item.avatar_url
-          });
-        }
-      }
-
-      setSearchResults(results);
-    } catch (error) {
-      console.error("Search failed:", error);
-      setSearchResults([]);
-    }
-    setIsSearching(false);
-  }, []);
-
-  useEffect(() => {
-    const timeout = setTimeout(() => searchUsers(searchQuery), 300);
-    return () => clearTimeout(timeout);
-  }, [searchQuery, searchUsers]);
-
-  useEffect(() => {
-    if (activeTab === "notifications" && p?.notifications) {
-      const updatedNotifications = p.notifications.map(n => ({ ...n, read: true }));
-      const updatedProfile = { ...p, notifications: updatedNotifications };
-      onProfileSave(updatedProfile);
-    }
-  }, [activeTab, p, onProfileSave]);
-
-  const followUser = (newUser: FollowedUser) => {
-    const updated = [...following, newUser];
-    setFollowing(updated);
-    const updatedProfile = { ...p!, following: updated };
-    onProfileSave(updatedProfile);
-  };
-
-  const unfollowUser = (username: string, platform: string) => {
-    const updated = following.filter(f => !(f.username === username && f.platform === platform));
-    setFollowing(updated);
-    const updatedProfile = { ...p!, following: updated };
-    onProfileSave(updatedProfile);
-  };
-
-  const removeFollower = (username: string, platform: string) => {
-    const updated = followers.filter(f => !(f.username === username && f.platform === platform));
-    setFollowers(updated);
-    const updatedProfile = { ...p!, followers: updated };
-    onProfileSave(updatedProfile);
-  };
-
-  const isFollowing = (username: string, platform: string) => {
-    return following.some(f => f.username === username && f.platform === platform);
-  };
-
-  const markNotificationRead = (id: string) => {
-    const updated = notifications.map(n => n.id === id ? { ...n, read: true } : n);
-    setNotifications(updated);
-    const updatedProfile = { ...p!, notifications: updated };
-    onProfileSave(updatedProfile);
-  };
-
-  const unreadCount = notifications.filter(n => !n.read).length;
-
-  const tabs = [
-    { id: "following" as const, label: "Following", count: following.length },
-    { id: "followers" as const, label: "Followers", count: followers.length },
-    { id: "notifications" as const, label: "Notifications", count: unreadCount }
-  ];
-
-  return (
-    <div className="fu">
-      <div style={{ padding: isMobile ? "36px 0 28px" : "56px 0 40px", borderBottom: `1px solid ${tk.border}`, marginBottom: 24 }}>
-        <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase" as const, color: tk.text3, marginBottom: 12 }}>Social Network</div>
-        <h1 style={{ fontSize: isMobile ? 28 : 38, fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, lineHeight: 1.08 }}>Following & Followers</h1>
-        <p style={{ fontSize: 15, color: tk.text2, lineHeight: 1.65, marginTop: 8 }}>Follow developers, see your followers, and get notified when scores change.</p>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 24, borderBottom: `1px solid ${tk.border}`, paddingBottom: 16 }}>
-        {tabs.map(tab => (
-          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-            style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: activeTab === tab.id ? tk.accent : "transparent", color: activeTab === tab.id ? tk.accentFg : tk.text2, cursor: "pointer", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
-            {tab.label}
-            {tab.count > 0 && <span style={{ background: activeTab === tab.id ? tk.accentFg : tk.blue, color: activeTab === tab.id ? tk.accent : "#fff", borderRadius: 10, padding: "2px 6px", fontSize: 10, fontWeight: 600, minWidth: 16, textAlign: "center" }}>{tab.count}</span>}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === "following" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          {/* Search and Add */}
-          <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, padding: "20px", boxShadow: tk.shadow }}>
-            <div style={{ fontSize: 15, fontWeight: 600, color: tk.text, marginBottom: 16 }}>Find Developers to Follow</div>
-            <div style={{ position: "relative" }}>
-              <input
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search GitHub usernames..."
-                style={{ width: "100%", padding: "12px 16px", borderRadius: 8, border: `1px solid ${tk.border}`, background: tk.bgAlt, color: tk.text, fontSize: 14, outline: "none" }}
-              />
-              {isSearching && (
-                <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", width: 16, height: 16, border: `2px solid ${tk.border}`, borderTopColor: tk.blue, borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
-              )}
-            </div>
-            {searchResults.length > 0 && (
-              <div style={{ marginTop: 12, borderRadius: 8, border: `1px solid ${tk.border}`, overflow: "hidden" }}>
-                {searchResults.map(result => (
-                  <div key={`${result.platform}-${result.username}`} style={{ padding: "12px 16px", borderBottom: `1px solid ${tk.border}`, background: tk.surface, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                      {result.avatar ? (
-                        <img src={result.avatar} alt={result.username} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover" }} />
-                      ) : (
-                        <div style={{ width: 32, height: 32, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 600, color: "#fff" }}>
-                          {initial(result.username)}
-                        </div>
-                      )}
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: tk.text }}>{result.username}</div>
-                        <div style={{ fontSize: 12, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}>
-                          <PlatformIcon platform={result.platform} size={12} color={tk.blue} />
-                          {result.platform}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => isFollowing(result.username, result.platform) ? unfollowUser(result.username, result.platform) : followUser(result)}
-                      style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${isFollowing(result.username, result.platform) ? tk.roseBorder : tk.border}`, background: isFollowing(result.username, result.platform) ? tk.roseLight : tk.accent, color: isFollowing(result.username, result.platform) ? tk.rose : tk.accentFg, cursor: "pointer", fontSize: 12, fontWeight: 500 }}
-                    >
-                      {isFollowing(result.username, result.platform) ? "Unfollow" : "Follow"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Following List */}
-          <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
-            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 15, fontWeight: 600, color: tk.text }}>Following ({following.length})</span>
-            </div>
-            {following.length === 0 ? (
-              <div style={{ padding: "48px 20px", textAlign: "center" }}>
-                <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 1-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg></div>
-                <div style={{ fontSize: 16, fontWeight: 600, color: tk.text, marginBottom: 8 }}>No one followed yet</div>
-                <div style={{ fontSize: 13, color: tk.text2, marginBottom: 16 }}>Search for developers above to start following them.</div>
-              </div>
-            ) : (
-              following.map(followed => (
-                <div key={`${followed.platform}-${followed.username}`} style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    {followed.avatar ? (
-                      <img src={followed.avatar} alt={followed.username} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
-                    ) : (
-                      <div style={{ width: 40, height: 40, borderRadius: "50%", background: tk.blue, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 600, color: "#fff" }}>
-                        {initial(followed.username)}
-                      </div>
-                    )}
-                    <div>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: tk.text }}>{followed.username}</div>
-                      <div style={{ fontSize: 12, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}>
-                        <PlatformIcon platform={followed.platform} size={12} color={tk.blue} />
-                        {followed.platform}
-                        {followed.lastScore && <span>• Score: {followed.lastScore.toFixed(1)}</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => unfollowUser(followed.username, followed.platform)}
-                    style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${tk.roseBorder}`, background: tk.roseLight, color: tk.rose, cursor: "pointer", fontSize: 12, fontWeight: 500 }}
-                  >
-                    Unfollow
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-      {activeTab === "followers" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
-            <div style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span style={{ fontSize: 15, fontWeight: 600, color: tk.text }}>Followers ({followers.length})</span>
-            </div>
-            {followers.length === 0 ? (
-              <div style={{ padding: "48px 20px", textAlign: "center" }}>
-                <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg></div>
-                <div style={{ fontSize: 16, fontWeight: 600, color: tk.text, marginBottom: 8 }}>No followers yet</div>
-                <div style={{ fontSize: 13, color: tk.text2, lineHeight: 1.6 }}>When other developers follow you, they will appear here.<br/>Share your profile to grow your network!</div>
-              </div>
-            ) : (
-              followers.map((follower, i) => (
-                <div key={`${follower.platform}-${follower.username}`} style={{ padding: "16px 20px", borderBottom: i < followers.length - 1 ? `1px solid ${tk.border}` : "none", display: "flex", alignItems: "center", justifyContent: "space-between", background: i % 2 === 0 ? "transparent" : tk.bgAlt }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    {follower.avatar ? (
-                      <img src={follower.avatar} alt={follower.username} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
-                    ) : (
-                      <div style={{ width: 40, height: 40, borderRadius: "50%", background: tk.teal, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 600, color: "#fff" }}>
-                        {initial(follower.username)}
-                      </div>
-                    )}
-                    <div>
-                      <div style={{ fontSize: 15, fontWeight: 600, color: tk.text }}>{follower.username}</div>
-                      <div style={{ fontSize: 12, color: tk.text3, display: "flex", alignItems: "center", gap: 4 }}>
-                        <PlatformIcon platform={follower.platform} size={12} color={tk.blue} />
-                        {follower.platform}
-                        {follower.lastScore != null && <span>• Score: {follower.lastScore.toFixed(1)}</span>}
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {!isFollowing(follower.username, follower.platform) && (
-                      <button
-                        onClick={() => followUser(follower)}
-                        style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${tk.border}`, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 12, fontWeight: 500 }}
-                      >
-                        Follow Back
-                      </button>
-                    )}
-                    <button
-                      onClick={() => removeFollower(follower.username, follower.platform)}
-                      style={{ padding: "6px 14px", borderRadius: 6, border: `1px solid ${tk.border}`, background: "transparent", color: tk.text3, cursor: "pointer", fontSize: 12, fontWeight: 500 }}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-      {activeTab === "notifications" && (
-        <div style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadow }}>
-          <div style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}` }}>
-            <span style={{ fontSize: 15, fontWeight: 600, color: tk.text }}>Notifications</span>
-          </div>
-          {notifications.length === 0 ? (
-            <div style={{ padding: "48px 20px", textAlign: "center" }}>
-              <div style={{ width: 48, height: 48, borderRadius: "50%", background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={tk.text3} strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg></div>
-              <div style={{ fontSize: 16, fontWeight: 600, color: tk.text, marginBottom: 8 }}>No notifications yet</div>
-              <div style={{ fontSize: 13, color: tk.text2 }}>Follow some developers to get notified about score changes.</div>
-            </div>
-          ) : (
-            notifications.map(notification => (
-              <div key={notification.id} style={{ padding: "16px 20px", borderBottom: `1px solid ${tk.border}`, background: notification.read ? tk.bgAlt : tk.surface, cursor: "pointer" }} onClick={() => markNotificationRead(notification.id)}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: notification.read ? tk.text3 : tk.blue, flexShrink: 0, marginTop: 6 }} />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: notification.read ? 400 : 600, color: tk.text, marginBottom: 4 }}>{notification.message}</div>
-                    <div style={{ fontSize: 12, color: tk.text3 }}>{new Date(notification.timestamp).toLocaleString()}</div>
-                    {notification.data && (
-                      <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 6, background: tk.bgAlt, border: `1px solid ${tk.border}` }}>
-                        <div style={{ fontSize: 12, color: tk.text2 }}>
-                          {notification.data.username} score changed from {notification.data.oldScore.toFixed(1)} to {notification.data.newScore.toFixed(1)}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────
    SETTINGS PAGE
 ───────────────────────────────────────────────── */
 function SettingsPage({ 
@@ -4956,7 +4617,7 @@ function SettingsPage({
   onManageAccount: (platform: string) => void;
   onDisconnectAccount: (platform: string) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<"account" | "appearance" | "notifications" | "privacy">("account");
+  const [activeTab, setActiveTab] = useState<"account" | "appearance" | "privacy">("account");
   const p = profile;
   const [displayName, setDisplayName] = useState(p?.displayName || user.name);
   const [bio, setBio] = useState(p?.bio || "");
@@ -4981,9 +4642,7 @@ function SettingsPage({
     setLocation(p?.location || "");
   }, [user.email, p?.displayName, p?.bio, p?.website, p?.location]);
   
-  const NOTIF_KEY = `deviq_notif_${user.email}`;
   const PRIVACY_KEY = `deviq_priv_${user.email}`;
-  const [notifs, setNotifs] = useState(() => { try { const s = localStorage.getItem(NOTIF_KEY); return s ? JSON.parse(s) : { weekly: true, tips: false, product: true }; } catch { return { weekly: true, tips: false, product: true }; } });
   const [privacy, setPrivacy] = useState(() => { try { const s = localStorage.getItem(PRIVACY_KEY); return s ? JSON.parse(s) : { publicProfile: true, showEmail: false, analytics: true }; } catch { return { publicProfile: true, showEmail: false, analytics: true }; } });
 
   const handleSaveAccount = async () => {
@@ -5068,7 +4727,6 @@ function SettingsPage({
       setPulling(false);
     }
   };
-  const handleSaveNotifs = () => { localStorage.setItem(NOTIF_KEY, JSON.stringify(notifs)); setSaved(true); setTimeout(() => setSaved(false), 2500); };
   const handleSavePrivacy = () => { localStorage.setItem(PRIVACY_KEY, JSON.stringify(privacy)); setSaved(true); setTimeout(() => setSaved(false), 2500); };
   const handleExportData = () => {
     const blob = new Blob([JSON.stringify({ user: { name: user.name, email: user.email, provider: user.provider }, profile: p, exportedAt: new Date().toISOString() }, null, 2)], { type: "application/json" });
@@ -5079,7 +4737,6 @@ function SettingsPage({
   const tabs = [
     { id: "account" as const, label: "Account", icon: <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg> },
     { id: "appearance" as const, label: "Appearance", icon: <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><circle cx="12" cy="10" r="3" /><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" /></svg> },
-    { id: "notifications" as const, label: "Notifications", icon: <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg> },
     { id: "privacy" as const, label: "Privacy", icon: <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg> },
   ];
 
@@ -5229,13 +4886,6 @@ function SettingsPage({
             <SettingRow label="Dark Mode" desc="Switch between light and dark interface themes."><div style={{ display: "flex", alignItems: "center", gap: 10 }}><span style={{ fontSize: 11, color: tk.text3 }}>{dark ? "Dark" : "Light"}</span><Toggle on={dark} onChange={onDarkToggle} /></div></SettingRow>
             <div style={{ padding: "14px 20px" }}><div style={{ fontSize: 11, color: tk.text3 }}>More appearance options coming soon.</div></div>
           </>)}
-          {activeTab === "notifications" && (<>
-            <div style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}><span style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>Email Notifications</span>{saved && <span style={{ fontSize: 11, color: tk.green, fontWeight: 500 }}>✓ Saved</span>}</div>
-            <SettingRow label="Weekly Digest" desc="A weekly summary of your developer activity."><Toggle on={notifs.weekly} onChange={() => setNotifs((n: typeof notifs) => ({ ...n, weekly: !n.weekly }))} /></SettingRow>
-            <SettingRow label="Tips & Tutorials" desc="Personalised coding tips based on your skill gaps."><Toggle on={notifs.tips} onChange={() => setNotifs((n: typeof notifs) => ({ ...n, tips: !n.tips }))} /></SettingRow>
-            <SettingRow label="Product Updates" desc="New features and announcements from DevIQ."><Toggle on={notifs.product} onChange={() => setNotifs((n: typeof notifs) => ({ ...n, product: !n.product }))} /></SettingRow>
-            <div style={{ padding: "16px 20px" }}><button onClick={handleSaveNotifs} style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" }}>Save Preferences</button></div>
-          </>)}
           {activeTab === "privacy" && (<>
             <div style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}><span style={{ fontSize: 13, fontWeight: 600, color: tk.text }}>Privacy & Data</span>{saved && <span style={{ fontSize: 11, color: tk.green, fontWeight: 500 }}>✓ Saved</span>}</div>
             <SettingRow label="Public Profile" desc="Allow others to view your DevIQ profile."><Toggle on={privacy.publicProfile} onChange={() => setPrivacy((p: typeof privacy) => ({ ...p, publicProfile: !p.publicProfile }))} /></SettingRow>
@@ -5353,7 +5003,7 @@ export default function Page() {
       // Detect page from URL pathname, preserving query params
       const pathname = window.location.pathname.replace(/^\/|\/$|\/index\.html$/g, "").split('?')[0];
       const pathPage = pathname as Page;
-      const validPages: Page[] = ["home", "analyze", "compare", "playground", "review", "profile", "settings", "history", "following", "chat", "practice"];
+      const validPages: Page[] = ["home", "analyze", "compare", "playground", "review", "profile", "settings", "history", "chat", "practice"];
       const initialPage = (pathname && validPages.includes(pathPage)) ? pathPage : "home";
       console.log("[DevIQ] Detected page from URL:", { pathname, pathPage, initialPage, url: window.location.href });
       setPage(initialPage);
@@ -5470,6 +5120,14 @@ export default function Page() {
     };
     init();
   }, []);
+
+  // Lock body scroll while the full-screen menu is open.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [menuOpen]);
 
   // ── Mandatory login: whenever there is no signed-in user (e.g. right after
   // logout), force the login window open. It cannot be dismissed, so logged-out
@@ -6109,53 +5767,6 @@ export default function Page() {
       const record: AnalysisRecord = { id: Date.now().toString(), date: new Date().toISOString(), github: gh.trim() || undefined, leetcode: lc.trim() || undefined, codeforces: cf.trim() || undefined, score: result.combined_score ?? 0, ghStars: result.github?.analytics?.total_stars, ghRepos: result.github?.analytics?.total_projects, ghLang: result.github?.analytics?.most_used_language, ghLangs: result.github?.analytics?.language_distribution, lcSolved: result.leetcode?.total_solved, lcEasy: result.leetcode?.easy_solved, lcMedium: result.leetcode?.medium_solved, lcHard: result.leetcode?.hard_solved, cfRating: result.codeforces?.rating, cfRank: result.codeforces?.rank, cfProblemsSolved: result.codeforces?.problems_solved, cfContests: result.codeforces?.contests_participated };
       const prev = p.recentAnalyses || []; p.recentAnalyses = [record, ...prev].slice(0, 20);
 
-      // Check for followed users and create notifications for score changes
-      const following = p.following || [];
-      const notifications = p.notifications || [];
-      const now = new Date().toISOString();
-
-      for (const followed of following) {
-        let currentScore: number | undefined;
-        let platform = followed.platform;
-
-        if (followed.platform === "github" && result.github && gh.trim() === followed.username) {
-          currentScore = result.github.analytics?.skill_score;
-        } else if (followed.platform === "leetcode" && result.leetcode && lc.trim() === followed.username) {
-          currentScore = Math.min(100, result.leetcode.easy_solved + result.leetcode.medium_solved * 3 + result.leetcode.hard_solved * 6);
-        } else if (followed.platform === "codeforces" && result.codeforces && cf.trim() === followed.username) {
-          currentScore = Math.min(100, result.codeforces.rating / 35);
-        }
-
-        if (currentScore !== undefined && followed.lastScore !== undefined && Math.abs(currentScore - followed.lastScore) >= 1) {
-          // Score changed significantly
-          const notification: Notification = {
-            id: `score_change_${followed.username}_${followed.platform}_${Date.now()}`,
-            type: "score_change",
-            message: `${followed.username}'s score ${currentScore > followed.lastScore ? 'increased' : 'decreased'} from ${followed.lastScore.toFixed(1)} to ${currentScore.toFixed(1)}`,
-            timestamp: now,
-            data: {
-              username: followed.username,
-              oldScore: followed.lastScore,
-              newScore: currentScore,
-              platform: followed.platform
-            },
-            read: false
-          };
-          notifications.unshift(notification);
-
-          // Update the followed user's last score
-          followed.lastScore = currentScore;
-          followed.lastUpdated = now;
-        } else if (currentScore !== undefined && followed.lastScore === undefined) {
-          // First time getting score for this user
-          followed.lastScore = currentScore;
-          followed.lastUpdated = now;
-        }
-      }
-
-      // Keep only recent notifications (last 50)
-      p.notifications = notifications.slice(0, 50);
-
       syncProfile(user.email, p).then(saved => setProfile({ ...saved })).catch(() => setProfile({ ...p }));
     }
   }, [gh, lc, cf, user]);
@@ -6369,31 +5980,22 @@ export default function Page() {
                     </div>), document.body)}
                 </div>
               )}
-              {user && profile && (
-                <button onClick={() => navigate("following")} style={{ position: "relative", width: isMobile || isTablet ? 40 : 36, height: isMobile || isTablet ? 40 : 36, borderRadius: 999, border: `1px solid ${tk.border}`, background: tk.surface, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: tk.text2 }}>
-                  <svg width={isMobile || isTablet ? 16 : 14} height={isMobile || isTablet ? 16 : 14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" /></svg>
-                  {(profile.notifications?.filter(n => !n.read).length ?? 0) > 0 && (
-                    <div style={{ position: "absolute", top: -4, right: -4, width: 16, height: 16, borderRadius: "50%", background: tk.rose, border: `2px solid ${tk.bg}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, color: "#fff" }}>
-                      {profile.notifications!.filter(n => !n.read).length}
-                    </div>
-                  )}
-                </button>
-              )}
               {(isMobile || isTablet) && (
                 <button onClick={toggleDark} aria-label="Toggle theme" style={{ position: "relative", width: 42, height: 24, borderRadius: 999, border: dark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.12)", background: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)", cursor: "pointer", padding: 0, flexShrink: 0 }}>
                   <span style={{ position: "absolute", top: "50%", left: dark ? 21 : 2, transform: "translateY(-50%)", width: 20, height: 20, borderRadius: "50%", background: dark ? "#FAFAFA" : "#1a1a1a", boxShadow: dark ? "0 1px 4px rgba(0,0,0,0.5)" : "0 1px 4px rgba(0,0,0,0.12)", transition: "left 0.25s cubic-bezier(0.32,0.72,0,1)" }} />
                 </button>
               )}
               {(isMobile || isTablet) && (
-                <button onClick={() => setMenuOpen(o => !o)} aria-label="Toggle menu" aria-expanded={menuOpen} style={{
-                  width: 40, height: 40, borderRadius: "50%", position: "relative",
-                  background: `linear-gradient(160deg, ${dark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.04)"}, ${dark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.02)"})`,
-                  border: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"}`,
-                  cursor: "pointer", padding: 0, flexShrink: 0
+                <button onClick={() => setMenuOpen(o => !o)} aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen} style={{
+                  width: 40, height: 40, borderRadius: 12,
+                  background: menuOpen ? tk.accent : "transparent",
+                  border: `1px solid ${menuOpen ? tk.accent : tk.border}`,
+                  cursor: "pointer", padding: 0, flexShrink: 0,
+                  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5,
+                  transition: "background 0.2s, border-color 0.2s"
                 }}>
-                  <span style={{ position: "absolute", left: 10, width: 20, height: 2, borderRadius: 2, background: tk.text, top: 13, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1), opacity 0.2s", transform: menuOpen ? "translateY(7px) rotate(45deg)" : "none" }} />
-                  <span style={{ position: "absolute", left: 10, width: 20, height: 2, borderRadius: 2, background: tk.text, top: 19, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1), opacity 0.2s", opacity: menuOpen ? 0 : 1 }} />
-                  <span style={{ position: "absolute", left: 10, width: 20, height: 2, borderRadius: 2, background: tk.text, top: 25, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1), opacity 0.2s", transform: menuOpen ? "translateY(-7px) rotate(-45deg)" : "none" }} />
+                  <span style={{ width: 18, height: 2, borderRadius: 2, background: menuOpen ? tk.accentFg : tk.text, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1)", transform: menuOpen ? "translateY(3.5px) rotate(45deg)" : "none" }} />
+                  <span style={{ width: 18, height: 2, borderRadius: 2, background: menuOpen ? tk.accentFg : tk.text, transition: "transform 0.3s cubic-bezier(0.22,1,0.36,1)", transform: menuOpen ? "translateY(-3.5px) rotate(-45deg)" : "none" }} />
                 </button>
               )}
             </div>
@@ -6408,104 +6010,86 @@ export default function Page() {
           )}
         </nav>
 
-        {/* SCRIM */}
+        {/* FULL-SCREEN MENU */}
         {(isMobile || isTablet) && (
-          <div onClick={() => setMenuOpen(false)} style={{
-            position: "fixed", inset: 0, zIndex: 250,
-            background: "rgba(0,0,0,0.35)",
+          <nav aria-hidden={!menuOpen} onClick={e => e.stopPropagation()} style={{
+            position: "fixed", inset: 0, zIndex: 260,
+            background: "#000000",
+            display: "flex", flexDirection: "column",
             opacity: menuOpen ? 1 : 0,
             pointerEvents: menuOpen ? "auto" as const : "none" as const,
-            transition: "opacity 0.35s cubic-bezier(0.22,1,0.36,1)"
-          }} />
-        )}
-        {/* GLASS DRAWER */}
-        {(isMobile || isTablet) && (
-          <nav onClick={e => e.stopPropagation()} style={{
-            position: "fixed", zIndex: 260,
-            top: 76, right: 16,
-            width: "64%", maxWidth: 250,
-            maxHeight: "calc(100vh - 96px)",
-            borderRadius: 28, overflow: "hidden",
-            background: dark 
-              ? "linear-gradient(165deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025))"
-              : "linear-gradient(165deg, rgba(255,255,255,0.92), rgba(255,255,255,0.85))",
-            backdropFilter: "blur(28px) saturate(170%)",
-            WebkitBackdropFilter: "blur(28px) saturate(170%)",
-            border: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)"}`,
-            boxShadow: dark ? "0 24px 60px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.20)" : "0 24px 60px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.72)",
-            display: "flex", flexDirection: "column",
-            transform: menuOpen ? "translateX(0)" : "translateX(calc(100% + 28px))",
-            opacity: menuOpen ? 1 : 0,
-            transition: "transform 0.4s cubic-bezier(0.22,1,0.36,1), opacity 0.3s cubic-bezier(0.22,1,0.36,1)"
+            transition: "opacity 0.3s ease",
           }}>
-            <div style={{ overflowY: "auto", padding: "18px 16px 24px", flex: 1, minHeight: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 8px", flexShrink: 0 }}>
+              <img src="/favicon.ico" alt="DevIQ" style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }} />
+              <span style={{ fontSize: 16, color: "#fff", fontFamily: APPLE_STACK }}>DevIQ</span>
+              <button onClick={() => setMenuOpen(false)} aria-label="Close menu" style={{ marginLeft: "auto", width: 40, height: 40, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.25)", background: "transparent", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <svg width={14} height={14} viewBox="0 0 12 12" fill="none"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+              </button>
+            </div>
+            <div style={{ overflowY: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              <div style={{ margin: "auto 0", padding: "16px 24px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" as const }}>
+                {MOBILE_NAV.slice(0, 2).map((item, i) => (
+                  <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
+                    padding: "10px 0", border: "none", background: "transparent", cursor: "pointer",
+                    fontSize: 27, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
+                    color: page === item.id ? "#fff" : "rgba(255,255,255,0.42)",
+                    opacity: menuOpen ? 1 : 0,
+                    transform: menuOpen ? "translateY(0)" : "translateY(14px)",
+                    transition: `opacity 0.35s ease ${80 + i * 60}ms, transform 0.45s cubic-bezier(0.22,1,0.36,1) ${80 + i * 60}ms, color 0.2s`,
+                  }}>
+                    {item.label}
+                  </button>
+                ))}
+                {navLinks.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap" as const, justifyContent: "center" as const, gap: "4px 18px", padding: "12px 0 6px", maxWidth: 300 }}>
+                    {navLinks.map(l => {
+                      const sectionActive = l.id === activeSection;
+                      return (
+                        <button key={l.id} onClick={() => { scroll(l.id); setMenuOpen(false); }} style={{
+                          padding: "6px 2px", border: "none", background: "transparent",
+                          cursor: "pointer", fontSize: 13.5, fontFamily: APPLE_STACK,
+                          color: sectionActive ? "#fff" : "rgba(255,255,255,0.42)",
+                          textDecoration: sectionActive ? "underline" : "none",
+                          textUnderlineOffset: 5,
+                        }}>
+                          {l.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {MOBILE_NAV.slice(2).map((item, k) => (
+                  <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
+                    padding: "10px 0", border: "none", background: "transparent", cursor: "pointer",
+                    fontSize: 27, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
+                    color: page === item.id ? "#fff" : "rgba(255,255,255,0.42)",
+                    opacity: menuOpen ? 1 : 0,
+                    transform: menuOpen ? "translateY(0)" : "translateY(14px)",
+                    transition: `opacity 0.35s ease ${190 + k * 55}ms, transform 0.45s cubic-bezier(0.22,1,0.36,1) ${190 + k * 55}ms, color 0.2s`,
+                  }}>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding: "12px 24px calc(26px + env(safe-area-inset-bottom))", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
               {user && (
-                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 6px 18px", borderBottom: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)"}`, marginBottom: 8 }}>
-                  {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 42, height: 42, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
-                  <div style={{ width: 42, height: 42, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, color: "#fff", flexShrink: 0, border: `1px solid ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.08)"}` }}>{initial(user.name)}</div>
-                  <div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: tk.text }}>{user.name}</div>
-                    <div style={{ fontSize: 12.5, color: tk.text3, marginTop: 1 }}>{user.email}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
+                  <div style={{ width: 30, height: 30, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
+                  <div style={{ textAlign: "left" as const }}>
+                    <div style={{ fontSize: 13, color: "#fff", fontFamily: APPLE_STACK, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{user.name}</div>
+                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.42)", fontFamily: APPLE_STACK, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{user.email}</div>
                   </div>
                 </div>
               )}
-              {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "chat" as const, label: "Ask AI" }, { id: "practice" as const, label: "Interview Prep" }] as { id: Page; label: string }[]).map(item => (
-                <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
-                  width: "100%", textAlign: "left", padding: "13px 12px", margin: "2px 0",
-                  borderRadius: 14, border: "none", cursor: "pointer",
-                  fontSize: 14, fontWeight: 600, letterSpacing: "0.01em",
-                  color: page === item.id ? tk.text : tk.text2,
-                  background: page === item.id ? (dark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)") : "transparent",
-                  fontFamily: "inherit", transition: "background 0.2s, color 0.2s"
-                }}
-                  onMouseEnter={e => { if (page !== item.id) (e.currentTarget as HTMLElement).style.background = dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)"; }}
-                  onMouseLeave={e => { if (page !== item.id) (e.currentTarget as HTMLElement).style.background = "transparent"; }}>
-                  {item.label}
-                  {page === item.id && <span style={{ width: 6, height: 6, borderRadius: "50%", background: tk.blue, boxShadow: `0 0 8px ${tk.blue}`, flexShrink: 0 }} />}
-                </button>
-              ))}
-              {navLinks.length > 0 && (
-                <div className="expand-down" key={navLinks.length}>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: tk.text3, margin: "18px 12px 6px" }}>Sections</div>
-                  {navLinks.map(l => (
-                    <button key={l.id} onClick={() => { scroll(l.id); setMenuOpen(false); }} style={{
-                      display: "block", width: "100%", textAlign: "left",
-                      padding: "11px 12px", margin: "2px 0", borderRadius: 14,
-                      border: "none", background: "transparent", cursor: "pointer",
-                      fontSize: 13.5, fontWeight: 500, color: tk.text2,
-                      fontFamily: "inherit", transition: "background 0.2s, color 0.2s"
-                    }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)"; (e.currentTarget as HTMLElement).style.color = tk.text; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = tk.text2; }}>
-                      {l.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <button onClick={() => { navigate("analyze"); setMenuOpen(false); }} style={{
-                width: "100%", padding: "13px", textAlign: "center",
-                borderRadius: 16, border: "none", cursor: "pointer",
-                fontSize: 14, fontWeight: 700,
-                color: dark ? "#0a0a0f" : tk.accentFg,
-                background: dark ? "linear-gradient(150deg, #FFFFFF, #D6D6D6)" : tk.accent,
-                boxShadow: dark ? "0 8px 20px rgba(255,255,255,0.18)" : "0 4px 12px rgba(0,0,0,0.10)",
-                fontFamily: "inherit", marginTop: 14
-              }}>
-                Run Analysis
+              <button onClick={toggleDark} style={{ padding: "11px 26px", border: "1px solid rgba(255,255,255,0.65)", background: "transparent", color: "#fff", cursor: "pointer", fontSize: 12.5, fontFamily: APPLE_STACK }}>
+                {dark ? "[ switch to light ]" : "[ switch to dark ]"}
               </button>
               {user && (
-                <button onClick={() => { handleLogout(); setMenuOpen(false); }} style={{
-                  display: "block", width: "100%", textAlign: "center",
-                  padding: "12px", marginTop: 8, borderRadius: 14,
-                  border: `1px solid ${dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"}`,
-                  background: "transparent", cursor: "pointer",
-                  fontSize: 13, fontWeight: 500, color: tk.rose,
-                  fontFamily: "inherit", transition: "all 0.15s"
-                }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = tk.roseLight; (e.currentTarget as HTMLElement).style.color = tk.rose; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = tk.rose; }}>
-                  Sign out
+                <button onClick={() => { handleLogout(); setMenuOpen(false); }} style={{ padding: 0, border: "none", background: "transparent", color: tk.rose, cursor: "pointer", fontSize: 12.5, fontFamily: APPLE_STACK }}>
+                  [ sign out ]
                 </button>
               )}
             </div>
@@ -6745,15 +6329,6 @@ export default function Page() {
               <button onClick={() => setAuthModal("login")} style={{ padding: "9px 20px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Sign In</button>
             </div>
           )}  
-
-          {/* FOLLOWING */}
-          {page === "following" && user && <FollowingPage user={user} profile={profile} tk={tk} isMobile={isMobile} onNavigate={(p) => navigate(p)} onProfileSave={handleProfileSave} />}
-          {page === "following" && !user && (
-            <div style={{ padding: "80px 0", textAlign: "center" }}>
-              <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to manage your following.</div>
-              <button onClick={() => setAuthModal("login")} style={{ padding: "9px 20px", border: "none", borderRadius: 7, background: tk.accent, color: tk.accentFg, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Sign In</button>
-            </div>
-          )}
 
           {/* CHAT */}
           {page === "chat" && user && <ChatPage user={user} profile={profile} tk={tk} isMobile={isMobile} messages={chatMessages} setMessages={setChatMessages} />}
