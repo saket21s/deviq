@@ -6032,7 +6032,7 @@ export default function Page() {
                 {MOBILE_NAV.slice(0, 2).map((item, i) => (
                   <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
                     padding: "10px 0", border: "none", background: "transparent", cursor: "pointer",
-                    fontSize: 27, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
+                    fontSize: 27, fontWeight: 700, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
                     color: page === item.id ? "#fff" : "rgba(255,255,255,0.42)",
                     opacity: menuOpen ? 1 : 0,
                     transform: menuOpen ? "translateY(0)" : "translateY(14px)",
@@ -6048,7 +6048,7 @@ export default function Page() {
                       return (
                         <button key={l.id} onClick={() => { scroll(l.id); setMenuOpen(false); }} style={{
                           padding: "6px 2px", border: "none", background: "transparent",
-                          cursor: "pointer", fontSize: 13.5, fontFamily: APPLE_STACK,
+                          cursor: "pointer", fontSize: 13.5, fontWeight: 700, fontFamily: APPLE_STACK,
                           color: sectionActive ? "#fff" : "rgba(255,255,255,0.42)",
                           textDecoration: sectionActive ? "underline" : "none",
                           textUnderlineOffset: 5,
@@ -6062,7 +6062,7 @@ export default function Page() {
                 {MOBILE_NAV.slice(2).map((item, k) => (
                   <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
                     padding: "10px 0", border: "none", background: "transparent", cursor: "pointer",
-                    fontSize: 27, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
+                    fontSize: 27, fontWeight: 700, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
                     color: page === item.id ? "#fff" : "rgba(255,255,255,0.42)",
                     opacity: menuOpen ? 1 : 0,
                     transform: menuOpen ? "translateY(0)" : "translateY(14px)",
