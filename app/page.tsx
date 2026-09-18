@@ -17,6 +17,7 @@ import {
   initiateGoogleLogin,
   initiateGithubLogin,
   exchangeCodeForToken,
+  claimPendingOAuth,
   verifyStateForProvider,
   getStoredUser,
   getAuthToken,
@@ -5516,89 +5517,77 @@ export default function Page() {
     };
   }, [profile, user]);
 
-  const handleLogin = useCallback(async (u: AuthUser) => {
+  const handleLogin = useCallback((u: AuthUser) => {
     const mergedUser = enrichAuthUser(u);
+    // 1. Show the signed-in UI instantly — no network on this path.
     setUser(mergedUser);
     // store locally in case of offline fallback
     cacheAuthUser(mergedUser);
-    try {
-      // Load profile from backend (source of truth for cross-device sync)
-      const remoteProfile = await apiGetProfile();
-      const localProfile = loadProfile(mergedUser.email);
-      const p = mergeProfilePreferNonEmpty(remoteProfile, localProfile);
-      if (!p.displayName && !localProfile?.displayName) p.displayName = mergedUser.name;
-      if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-      if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
-      // Save backend data to localStorage for offline access
-      saveProfile(mergedUser.email, p);
-      setProfile(p);
-      
-      // Sync merged profile to cloud immediately for cross-device availability
-      console.log('☁️ Syncing profile to cloud after login...');
-      syncProfile(mergedUser.email, p).then(saved => {
-        console.log('✅ Profile synced to cloud after login');
-        saveProfile(mergedUser.email, saved);
-        lastPulledHashRef.current = JSON.stringify(saved);
-      }).catch(err => {
-        console.warn('⚠️ Initial sync after login failed, but profile is cached locally:', err);
-      });
-    } catch (err) {
-      console.error('Error loading profile on login:', err);
-      // Backend failed - load from localStorage and sync to backend
-      const p = loadProfile(mergedUser.email);
-      if (!p.joinedAt) p.joinedAt = new Date().toISOString();
-      if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
-      // Try to sync local data to backend for future use
-      console.log('🔄 Syncing local profile to cloud after login (backend unavailable initially)');
-      syncProfile(mergedUser.email, p).then(saved => {
-        console.log('✅ Local profile synced to cloud');
-        setProfile(saved);
-      }).catch(() => {
-        console.warn('⚠️ Could not sync to cloud, using local profile');
-        setProfile(p);
-      });
-    }
     setAuthModal(null); setMenuOpen(false);
+
+    // 2. Instant local profile so profile-driven UI never waits on the network.
+    const local = loadProfile(mergedUser.email);
+    if (!local.joinedAt) local.joinedAt = new Date().toISOString();
+    if (!local.displayName) local.displayName = mergedUser.name;
+    if (!local.avatar && mergedUser.avatar) local.avatar = mergedUser.avatar;
+    saveProfile(mergedUser.email, local);
+    setProfile(local);
+
+    // 3. Refresh from the cloud in the background (fire-and-forget) — the
+    // visible sign-in must never block on these round-trips.
+    (async () => {
+      try {
+        // Load profile from backend (source of truth for cross-device sync)
+        const remoteProfile = await apiGetProfile();
+        const current = loadProfile(mergedUser.email);
+        const p = mergeProfilePreferNonEmpty(remoteProfile, current);
+        if (!p.displayName && !current?.displayName) p.displayName = mergedUser.name;
+        if (!p.joinedAt) p.joinedAt = new Date().toISOString();
+        if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
+        // Save backend data to localStorage for offline access
+        saveProfile(mergedUser.email, p);
+        setProfile(p);
+        if (!mergedUser.avatar && p.avatar) {
+          const enriched = enrichAuthUser({ ...mergedUser, avatar: p.avatar });
+          setUser(enriched);
+          cacheAuthUser(enriched);
+        }
+
+        // Sync merged profile to cloud for cross-device availability
+        syncProfile(mergedUser.email, p).then(saved => {
+          saveProfile(mergedUser.email, saved);
+          lastPulledHashRef.current = JSON.stringify(saved);
+        }).catch(() => {});
+      } catch {
+        // Backend failed - push local data to backend for future use
+        syncProfile(mergedUser.email, loadProfile(mergedUser.email)).then(saved => {
+          setProfile(saved);
+        }).catch(() => {});
+      }
+    })();
   }, []);
 
-  // Keep a module-level flag so this effect truly only runs once per page load,
-  // even under React 18 StrictMode double-invocation.
+  // Fallback OAuth completion: the callback pages normally finish sign-in
+  // themselves now, but a refresh mid-exchange (or an older tab) can leave a
+  // pending payload behind — finish it here so nobody gets stuck logged out.
   useEffect(() => {
     // Guard: only process once per mount (prevents StrictMode double-fire and
     // any re-render from causing a second exchange attempt).
     if ((window as any)._oauthProcessed) return;
 
-    const PENDING_OAUTH_KEY = "deviq_pending_oauth";
-    const PENDING_OAUTH_LOCAL_KEY = "deviq_pending_oauth_local";
-
-    const raw =
-      sessionStorage.getItem(PENDING_OAUTH_KEY) ||
-      localStorage.getItem(PENDING_OAUTH_LOCAL_KEY);
-
-    if (!raw) return;
+    // Atomically claim the payload — a single-use code is exchanged exactly once.
+    const pending = claimPendingOAuth();
+    if (!pending?.provider || !pending?.code) return;
 
     // Mark processed immediately — before any async work — so even if the
     // component re-renders during the exchange this block is skipped.
     (window as any)._oauthProcessed = true;
 
-    // Clear storage immediately so a page refresh doesn't re-process a stale code.
-    sessionStorage.removeItem(PENDING_OAUTH_KEY);
-    localStorage.removeItem(PENDING_OAUTH_LOCAL_KEY);
-
     const run = async () => {
       try {
-        const pending = JSON.parse(raw) as {
-          provider?: "google" | "github";
-          code?: string;
-          state?: string;
-          createdAt?: number;
-        };
-
-        const provider = pending.provider;
-        const code = pending.code;
+        const provider = pending.provider as "google" | "github";
+        const code = pending.code as string;
         const state = pending.state || "";
-
-        if (!provider || !code) return;
 
         // Drop expired callbacks (10 minutes is generous for slow mobile flows)
         if (
@@ -5615,7 +5604,7 @@ export default function Page() {
         }
 
         // exchangeCodeForToken ALREADY clears storage inside itself, but we
-        // cleared it above too so the effect can never loop regardless.
+        // claimed it above too so the effect can never loop regardless.
         const exchangeResult = await exchangeCodeForToken(code, provider);
 
         if (exchangeResult.token) {
