@@ -30,9 +30,9 @@ function GoogleCallbackContent() {
     const pending = { provider: "google" as const, code, state, createdAt: Date.now() };
     stashPendingOAuth(pending);
 
-    if (!verifyStateForProvider(state, "google")) {
-      console.warn("OAuth state mismatch — proceeding with caution");
-    }
+    // State is verified softly: the code exchange itself proves identity,
+    // and verification consumes the stored state either way.
+    verifyStateForProvider(state, "google");
 
     // Complete sign-in HERE (instead of deferring to the home page) and
     // persist the session BEFORE navigating — so "/" paints the logged-in

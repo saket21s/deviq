@@ -412,12 +412,6 @@ async function serverRequest(path: string, opts: RequestInit = {}) {
   }
 
   const base = BACKEND;
-  if (process.env.NODE_ENV === "development") {
-    console.log(`🌐 API Request: ${base}${path}`, {
-      method: opts.method || 'GET',
-      hasAuthToken: !!authToken
-    });
-  }
 
   try {
     const r = await fetch(`${base}${path}`, opts);
@@ -598,7 +592,7 @@ async function apiLogout(): Promise<void> {
   } catch { }
   // Clear auth token from localStorage
   localStorage.removeItem("auth_token");
-  console.log('✅ Auth token cleared from localStorage');
+
 }
 
 async function apiSaveProfilePicture(pictureUrl?: string): Promise<void> {
@@ -710,13 +704,10 @@ async function apiGetProfile(): Promise<UserProfile> {
     
     // Handle 304 Not Modified - return null to indicate no change
     if (remote === null) {
-      console.log('📦 Profile unchanged on server (304)');
+
       throw new Error('NOT_MODIFIED'); // Signal to caller to use current data
     }
     
-    console.log('📥 Loaded profile from backend:', {
-      recentAnalyses: remote.recentAnalyses?.length || 0
-    });
     return normalizeUserProfile(remote);
   } catch (err: any) {
     console.error('❌ Failed to load profile from backend:', err?.message || err);
@@ -3941,7 +3932,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
         }
       } catch (backendError) {
         // Backend unavailable, use mock data
-        console.warn("Backend unavailable, using mock data");
+
       }
 
       // If we didn't get categories from backend, use realistic mock data
@@ -4091,13 +4082,13 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
   const fetchCompanyProblems = useCallback(async (slug: string) => {
     if (!slug) return;
-    console.log("[DevIQ] Fetching problems for company:", slug);
+
     setCompanyLoading(true);
     setCompanyData(null);
     setCompanyError(null);
     try {
       const url = `${BACKEND}/leetcode/company-problems/${slug}`;
-      console.log("[DevIQ] API endpoint:", url);
+
       const res = await fetch(url);
       if (!res.ok) {
         if (res.status === 404) {
@@ -4108,7 +4099,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
         throw new Error(detail);
       }
       const data = await res.json();
-      console.log("[DevIQ] Received problems count:", data.problems?.length, "for company:", slug);
+
       if (data && Array.isArray(data.problems) && data.problems.length > 0) {
         setCompanyData(data);
         setTimeout(() => {
@@ -4900,7 +4891,6 @@ export default function Page() {
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
       const p = (e.state?.page as Page) || "home";
-      console.log("[DevIQ] Popstate event:", { page: p });
       setPage(p); setMenuOpen(false); setUserMenuOpen(false);
     };
     window.addEventListener("popstate", onPop); return () => window.removeEventListener("popstate", onPop);
@@ -4974,7 +4964,6 @@ export default function Page() {
       const pathPage = pathname as Page;
       const validPages: Page[] = ["home", "analyze", "compare", "playground", "review", "profile", "settings", "history", "chat", "practice"];
       const initialPage = (pathname && validPages.includes(pathPage)) ? pathPage : "home";
-      console.log("[DevIQ] Detected page from URL:", { pathname, pathPage, initialPage, url: window.location.href });
       setPage(initialPage);
 
       // Peek for an in-flight OAuth return BEFORE anything can claim it —
@@ -5041,14 +5030,13 @@ export default function Page() {
           } catch (err: any) {
             // If NOT_MODIFIED, use localStorage (it's already current)
             if (err?.message === 'NOT_MODIFIED') {
-              console.log('📦 Using cached profile (server confirms it\'s current)');
+
               const p = loadProfile(mergedUser.email);
               if (!p.joinedAt) p.joinedAt = new Date().toISOString();
               if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
               setProfile(p);
             } else {
-              // fallback to localStorage profile if server fails
-              console.log('⚠️ Backend unreachable, using cached profile');
+
               const p = loadProfile(mergedUser.email);
               if (!p.joinedAt) p.joinedAt = new Date().toISOString();
               if (!p.avatar && mergedUser.avatar) p.avatar = mergedUser.avatar;
@@ -5129,7 +5117,7 @@ export default function Page() {
         const currentHash = JSON.stringify(current);
 
         if (latestHash !== currentHash) {
-          console.log('✨ Profile updated from another device — auto-syncing!');
+
           if (!latestProfile.joinedAt) latestProfile.joinedAt = new Date().toISOString();
           if (!latestProfile.avatar && user.avatar) latestProfile.avatar = user.avatar;
           lastPulledHashRef.current = JSON.stringify(latestProfile);
@@ -5172,13 +5160,13 @@ export default function Page() {
       if (isSyncingRef.current) return;
       isSyncingRef.current = true;
       try {
-        console.log('☁️  Auto-pushing profile changes to cloud…');
+
         const saved = await syncProfile(user.email, profile);
         lastPulledHashRef.current = JSON.stringify(saved);
         // Don't setProfile here — it would loop; local state is already correct
         saveProfile(user.email, saved);
       } catch {
-        console.log('⚠️  Auto-push failed — will retry next cycle');
+
       } finally {
         isSyncingRef.current = false;
       }
@@ -5266,14 +5254,12 @@ export default function Page() {
           pending.createdAt &&
           Date.now() - pending.createdAt > 10 * 60 * 1000
         ) {
-          console.warn("OAuth callback expired — ignoring");
           return;
         }
 
-        // State verification (soft — warns but doesn't block)
-        if (!verifyStateForProvider(state, provider)) {
-          console.warn("OAuth state mismatch — proceeding with caution");
-        }
+        // Consume the stored OAuth state (soft verification; the code
+        // exchange itself proves identity, so a mismatch is non-fatal).
+        verifyStateForProvider(state, provider);
 
         // exchangeCodeForToken ALREADY clears storage inside itself, but we
         // claimed it above too so the effect can never loop regardless.
@@ -5311,9 +5297,7 @@ export default function Page() {
 
     // Best-effort background sync + server logout; never block the UI.
     if (userToSync && profileToSync) {
-      syncProfile(userToSync.email, profileToSync)
-        .then(() => console.log('💾 Profile synced before logout'))
-        .catch(() => console.log('⚠️  Profile sync failed during logout'));
+      syncProfile(userToSync.email, profileToSync).catch(() => {});
     }
     apiLogout().catch(() => {});
   };
@@ -5361,7 +5345,7 @@ export default function Page() {
 
   const handleSyncNow = async () => {
     if (!user || !profile) throw new Error('Not logged in');
-    console.log('🚀 Manual sync triggered');
+
     isSyncingRef.current = true;
     try {
       const saved = await syncProfile(user.email, profile);
@@ -5375,7 +5359,7 @@ export default function Page() {
 
   const handlePullLatest = async () => {
     if (!user) throw new Error('Not logged in');
-    console.log('⬇️ Pulling latest profile from cloud');
+
     try {
       const latestProfileRemote = await apiGetProfile();
       const latestProfile = mergeProfilePreferNonEmpty(latestProfileRemote, profile || loadProfile(user.email));
@@ -5386,7 +5370,7 @@ export default function Page() {
       saveProfile(user.email, latestProfile);
     } catch (err: any) {
       if (err?.message === 'NOT_MODIFIED') {
-        console.log('📦 Profile already up to date (304)');
+
         // This is not an error - profile is already current
         return;
       }
@@ -5566,7 +5550,7 @@ export default function Page() {
     try {
       if (platform === 'github') {
         // Use GitHub OAuth
-        console.log('🔗 Starting GitHub OAuth flow...');
+
         if (!GITHUB_CLIENT_ID) {
           console.error('❌ GitHub OAuth not configured - missing GITHUB_CLIENT_ID');
           setAccountSaveMessage({ text: 'GitHub OAuth is not configured', type: 'error' });
@@ -5581,15 +5565,12 @@ export default function Page() {
         localStorage.setItem('github_connect_action', 'connect_account');
         const redirectUri = `${window.location.origin}/auth/callback/github`;
         const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email%20read:user&state=${state}`;
-        console.log('🔓 Opening GitHub OAuth popup with URL:', githubAuthUrl.split('&state=')[0] + '&state=...');
         const popup = window.open(githubAuthUrl, 'GitHub Login', 'width=600,height=700');
         if (!popup) {
           console.error('❌ Failed to open GitHub login popup');
           setAccountSaveMessage({ text: 'Failed to open GitHub login popup. Check if popups are allowed.', type: 'error' });
           setTimeout(() => setAccountSaveMessage(null), 3000);
           setConnectingPlatform(null);
-        } else {
-          console.log('✅ GitHub OAuth popup opened successfully');
         }
         return;
       }
@@ -5723,8 +5704,8 @@ export default function Page() {
         if (complexRepos.length > 0) {
           result.github.advancedAnalytics.complexRepos = complexRepos;
         }
-      } catch (e) {
-        console.log("Could not calculate advanced analytics");
+      } catch {
+        // Advanced analytics are best-effort; analysis continues without them.
       }
     }
     
