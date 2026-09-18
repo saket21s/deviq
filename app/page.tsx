@@ -2467,7 +2467,7 @@ function AuthModal({ mode, tk, onAuth, onSwitchMode }: {
         <div style={{ padding: "24px 28px 18px", borderBottom: `1px solid ${tk.border}` }}>
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
             <div>
-              <div style={{ width: 36, height: 36, borderRadius: 10, background: tk.bgAlt, border: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: tk.text, marginBottom: 14, letterSpacing: "-0.03em" }}>D</div>
+              <img src="/favicon.ico" alt="DevIQ" style={{ width: 36, height: 36, borderRadius: 10, border: `1px solid ${tk.border}`, marginBottom: 14, display: "block" }} />
               <div style={{ fontSize: 18, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em", marginBottom: 4 }}>{isLogin ? "Welcome back" : "Create account"}</div>
               <div style={{ fontSize: 12, color: tk.text3 }}>{isLogin ? "Sign in to your DevIQ account" : "Join DevIQ — it's free"}</div>
             </div>
