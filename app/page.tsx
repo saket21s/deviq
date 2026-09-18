@@ -18,6 +18,8 @@ import {
   initiateGithubLogin,
   exchangeCodeForToken,
   claimPendingOAuth,
+  PENDING_OAUTH_KEY,
+  PENDING_OAUTH_LOCAL_KEY,
   verifyStateForProvider,
   getStoredUser,
   getAuthToken,
@@ -5343,7 +5345,14 @@ export default function Page() {
       const initialPage = (pathname && validPages.includes(pathPage)) ? pathPage : "home";
       console.log("[DevIQ] Detected page from URL:", { pathname, pathPage, initialPage, url: window.location.href });
       setPage(initialPage);
-      
+
+      // Peek for an in-flight OAuth return BEFORE anything can claim it —
+      // when sign-in is already in progress we must not pop the login modal.
+      let hasPendingOAuth = false;
+      try {
+        hasPendingOAuth = !!(sessionStorage.getItem(PENDING_OAUTH_KEY) || localStorage.getItem(PENDING_OAUTH_LOCAL_KEY));
+      } catch { hasPendingOAuth = false; }
+
       // Replace state with correct page to sync browser history
       const url = initialPage === "home" ? "/" : `/${initialPage}`;
       window.history.replaceState({ page: initialPage }, "", url);
@@ -5425,6 +5434,10 @@ export default function Page() {
                 cacheAuthUser(merged);
               })
               .catch(() => {});
+          }
+          // No session and no in-flight OAuth → show login first, before the home page.
+          if (!savedUser && !hasPendingOAuth) {
+            setAuthModal("login");
           }
         }
       } catch {
