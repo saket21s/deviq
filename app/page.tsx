@@ -6014,7 +6014,7 @@ export default function Page() {
         {(isMobile || isTablet) && (
           <nav aria-hidden={!menuOpen} onClick={e => e.stopPropagation()} style={{
             position: "fixed", inset: 0, zIndex: 260,
-            background: "#000000",
+            background: dark ? "#000000" : "#FFFFFF",
             display: "flex", flexDirection: "column",
             opacity: menuOpen ? 1 : 0,
             pointerEvents: menuOpen ? "auto" as const : "none" as const,
@@ -6022,10 +6022,28 @@ export default function Page() {
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 8px", flexShrink: 0 }}>
               <img src="/favicon.ico" alt="DevIQ" style={{ width: 28, height: 28, borderRadius: 8, flexShrink: 0 }} />
-              <span style={{ fontSize: 16, color: "#fff", fontFamily: APPLE_STACK }}>DevIQ</span>
-              <button onClick={() => setMenuOpen(false)} aria-label="Close menu" style={{ marginLeft: "auto", width: 40, height: 40, borderRadius: "50%", border: "1px solid rgba(255,255,255,0.25)", background: "transparent", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <svg width={14} height={14} viewBox="0 0 12 12" fill="none"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-              </button>
+              <span style={{ fontSize: 16, color: tk.text, fontFamily: APPLE_STACK }}>DevIQ</span>
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <button onClick={toggleDark} aria-label="Toggle theme" style={{ width: 36, height: 36, borderRadius: "50%", border: `1px solid ${tk.border}`, background: "transparent", color: tk.text, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {dark
+                    ? <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+                    : <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>}
+                </button>
+                {user && (
+                  <button onClick={() => { navigate("profile"); setMenuOpen(false); }} aria-label="Profile" style={{ width: 32, height: 32, borderRadius: "50%", border: "none", background: "transparent", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                    {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", display: "block" }} /> : null}
+                    <div style={{ width: 32, height: 32, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#fff" }}>{initial(user.name)}</div>
+                  </button>
+                )}
+                {user && (
+                  <button onClick={() => { handleLogout(); setMenuOpen(false); }} aria-label="Sign out" style={{ width: 36, height: 36, borderRadius: "50%", border: `1px solid ${tk.roseBorder}`, background: "transparent", color: tk.rose, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
+                  </button>
+                )}
+                <button onClick={() => setMenuOpen(false)} aria-label="Close menu" style={{ width: 40, height: 40, borderRadius: "50%", border: `1px solid ${tk.border}`, background: "transparent", color: tk.text, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <svg width={14} height={14} viewBox="0 0 12 12" fill="none"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+                </button>
+              </div>
             </div>
             <div style={{ overflowY: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
               <div style={{ margin: "auto 0", padding: "16px 24px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" as const }}>
@@ -6033,7 +6051,7 @@ export default function Page() {
                   <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
                     padding: "10px 0", border: "none", background: "transparent", cursor: "pointer",
                     fontSize: 27, fontWeight: 700, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
-                    color: page === item.id ? "#fff" : "rgba(255,255,255,0.42)",
+                    color: page === item.id ? tk.text : tk.text2,
                     opacity: menuOpen ? 1 : 0,
                     transform: menuOpen ? "translateY(0)" : "translateY(14px)",
                     transition: `opacity 0.35s ease ${80 + i * 60}ms, transform 0.45s cubic-bezier(0.22,1,0.36,1) ${80 + i * 60}ms, color 0.2s`,
@@ -6049,7 +6067,7 @@ export default function Page() {
                         <button key={l.id} onClick={() => { scroll(l.id); setMenuOpen(false); }} style={{
                           padding: "6px 2px", border: "none", background: "transparent",
                           cursor: "pointer", fontSize: 13.5, fontWeight: 700, fontFamily: APPLE_STACK,
-                          color: sectionActive ? "#fff" : "rgba(255,255,255,0.42)",
+                          color: sectionActive ? tk.text : tk.text2,
                           textDecoration: sectionActive ? "underline" : "none",
                           textUnderlineOffset: 5,
                         }}>
@@ -6063,7 +6081,7 @@ export default function Page() {
                   <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
                     padding: "10px 0", border: "none", background: "transparent", cursor: "pointer",
                     fontSize: 27, fontWeight: 700, fontFamily: APPLE_STACK, letterSpacing: "-0.02em",
-                    color: page === item.id ? "#fff" : "rgba(255,255,255,0.42)",
+                    color: page === item.id ? tk.text : tk.text2,
                     opacity: menuOpen ? 1 : 0,
                     transform: menuOpen ? "translateY(0)" : "translateY(14px)",
                     transition: `opacity 0.35s ease ${190 + k * 55}ms, transform 0.45s cubic-bezier(0.22,1,0.36,1) ${190 + k * 55}ms, color 0.2s`,
@@ -6073,27 +6091,7 @@ export default function Page() {
                 ))}
               </div>
             </div>
-            <div style={{ padding: "12px 24px calc(26px + env(safe-area-inset-bottom))", flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-              {user && (
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {user.avatar ? <img src={user.avatar} alt={user.name} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} /> : null}
-                  <div style={{ width: 30, height: 30, borderRadius: "50%", background: user.provider === "github" ? "#24292e" : user.provider === "google" ? "#4285F4" : tk.blue, display: user.avatar ? "none" : "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#fff", flexShrink: 0 }}>{initial(user.name)}</div>
-                  <div style={{ textAlign: "left" as const }}>
-                    <div style={{ fontSize: 13, color: "#fff", fontFamily: APPLE_STACK, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{user.name}</div>
-                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.42)", fontFamily: APPLE_STACK, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 200 }}>{user.email}</div>
-                  </div>
-                </div>
-              )}
-              <button onClick={toggleDark} style={{ padding: "11px 26px", border: "1px solid rgba(255,255,255,0.65)", background: "transparent", color: "#fff", cursor: "pointer", fontSize: 12.5, fontFamily: APPLE_STACK }}>
-                {dark ? "[ switch to light ]" : "[ switch to dark ]"}
-              </button>
-              {user && (
-                <button onClick={() => { handleLogout(); setMenuOpen(false); }} style={{ padding: 0, border: "none", background: "transparent", color: tk.rose, cursor: "pointer", fontSize: 12.5, fontFamily: APPLE_STACK }}>
-                  [ sign out ]
-                </button>
-              )}
-            </div>
-          </nav>
+            </nav>
         )}
 
         {/* PAGES */}
