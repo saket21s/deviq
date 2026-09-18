@@ -6046,7 +6046,7 @@ export default function Page() {
               </div>
             </div>
             <div style={{ overflowY: "auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-              <div style={{ margin: "auto 0", padding: "16px 24px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" as const }}>
+              <div style={{ margin: "auto 0", padding: "16px 24px 72px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" as const }}>
                 {MOBILE_NAV.slice(0, 2).map((item, i) => (
                   <button key={item.id} onClick={() => { navigate(item.id); setMenuOpen(false); }} style={{
                     padding: "10px 0", border: "none", background: "transparent", cursor: "pointer",
