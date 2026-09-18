@@ -2382,10 +2382,9 @@ function CompareMode({ tk, isMobile, onComparison }: { tk: Theme; isMobile: bool
 /* ─────────────────────────────────────────────────
    AUTH MODAL
 ───────────────────────────────────────────────── */
-function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
-  mode: "login" | "signup"; tk: Theme; onAuth: (u: AuthUser) => void; onClose: () => void; onSwitchMode: () => void;
+function AuthModal({ mode, tk, onAuth, onSwitchMode }: {
+  mode: "login" | "signup"; tk: Theme; onAuth: (u: AuthUser) => void; onSwitchMode: () => void;
 }) {
-  const overlayRef = useRef<HTMLDivElement>(null);
   const [name, setName] = useState(""); const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [confirm, setConfirm] = useState("");
   const [showPw, setShowPw] = useState(false); const [showConfirm, setShowConfirm] = useState(false); const [agreed, setAgreed] = useState(false);
   const [touched, setTouched] = useState<Record<string, boolean>>({});
@@ -2403,11 +2402,7 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
   const strengthColors = ["", tk.rose, tk.rose, tk.amber, tk.green];
   const strengthLabels = ["", "Very weak", "Weak", "Fair", "Strong"];
 
-  useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
-  }, [onClose]);
-
+  // Sign-in is mandatory — the window cannot be dismissed (no Escape close).
   // Firebase Auth is handled directly in handleSocialAuth, no need for event listeners
   useEffect(() => {
     // Cleanup effect
@@ -2466,7 +2461,7 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
   };
 
   return (
-    <div ref={overlayRef} onClick={e => { if (e.target === overlayRef.current) onClose(); }}
+    <div
       style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, animation: "overlayIn 0.2s ease both" }}>
       <div style={{ width: "100%", maxWidth: 420, maxHeight: "92vh", overflowY: "auto", background: tk.surface, borderRadius: 16, border: `1px solid ${tk.border}`, boxShadow: tk.shadowLg, animation: "modalIn 0.28s cubic-bezier(0.34,1.4,0.64,1) both", position: "relative" }}>
         <div style={{ padding: "24px 28px 18px", borderBottom: `1px solid ${tk.border}` }}>
@@ -2476,9 +2471,6 @@ function AuthModal({ mode, tk, onAuth, onClose, onSwitchMode }: {
               <div style={{ fontSize: 18, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em", marginBottom: 4 }}>{isLogin ? "Welcome back" : "Create account"}</div>
               <div style={{ fontSize: 12, color: tk.text3 }}>{isLogin ? "Sign in to your DevIQ account" : "Join DevIQ — it's free"}</div>
             </div>
-            <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: tk.text3, flexShrink: 0, marginLeft: 12 }}>
-              <svg width={12} height={12} viewBox="0 0 12 12" fill="none"><path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-            </button>
           </div>
         </div>
         <div style={{ padding: "20px 28px 28px", display: "flex", flexDirection: "column", gap: 12 }}>
@@ -5273,6 +5265,12 @@ export default function Page() {
   const [page, setPage] = useState<Page>("home");
 
   const navigate = useCallback((to: Page, replace = false) => {
+    // Logged-out users must sign in before reaching any feature.
+    // (Reads the persisted session directly — this runs before user state exists.)
+    if (!loadSession() && to !== "home") {
+      setAuthModal("login");
+      return;
+    }
     setPage(to); setMenuOpen(false); setUserMenuOpen(false);
     window.scrollTo(0, 0); // every tab starts at the top — otherwise headers/avatars sit above the fold
     const url = to === "home" ? "/" : `/${to}`;
@@ -5472,6 +5470,22 @@ export default function Page() {
     };
     init();
   }, []);
+
+  // ── Mandatory login: whenever there is no signed-in user (e.g. right after
+  // logout), force the login window open. It cannot be dismissed, so logged-out
+  // users can never use any feature without signing in.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (user) return;
+    if (authModal) return;
+    try {
+      if (
+        sessionStorage.getItem(PENDING_OAUTH_KEY) ||
+        localStorage.getItem(PENDING_OAUTH_LOCAL_KEY)
+      ) return; // OAuth return in progress → let it complete quietly
+    } catch { /* storage unavailable — fall through and show login */ }
+    setAuthModal("login");
+  }, [user, hydrated, authModal]);
 
   // ── Auto-PULL: Poll server for updates from other devices every 15 seconds ──
   useEffect(() => {
@@ -6242,7 +6256,7 @@ export default function Page() {
 
       <div suppressHydrationWarning style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: "'Geist', system-ui, sans-serif", transition: "background 0.2s, color 0.2s" }}>
 
-        {authModal && <AuthModal mode={authModal} tk={tk} onAuth={handleLogin} onClose={() => setAuthModal(null)} onSwitchMode={() => setAuthModal(m => m === "login" ? "signup" : "login")} />}
+        {authModal && <AuthModal mode={authModal} tk={tk} onAuth={handleLogin} onSwitchMode={() => setAuthModal(m => m === "login" ? "signup" : "login")} />}
 
         {/* NAVBAR */}
         <nav suppressHydrationWarning style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 200, background: "transparent", padding: isMobile ? "10px 12px 0" : isTablet ? "14px 16px 0" : "14px 96px 0 16px" }}>
