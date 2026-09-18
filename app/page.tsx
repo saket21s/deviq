@@ -871,6 +871,7 @@ const MOBILE_NAV: { id: Page; label: string }[] = [
   { id: "analyze", label: "Analyze" },
   { id: "compare", label: "Compare" },
   { id: "playground", label: "Playground" },
+  { id: "review", label: "Review" },
   { id: "chat", label: "Ask AI" },
   { id: "practice", label: "Interview Prep" },
 ];
@@ -5876,7 +5877,7 @@ export default function Page() {
             <button onClick={() => navigate("home")} style={{ fontSize: isMobile ? 17 : isTablet ? 19 : 17, fontWeight: 700, color: tk.text, letterSpacing: "-0.03em", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0, display: "flex", alignItems: "center" }}>DevIQ</button>
             {!isMobile && !isTablet && (
               <div ref={navScrollRef} className="nav-scroll" style={{ display: "flex", alignItems: "center", gap: 2, flex: 1, minWidth: 0, overflowX: "auto", scrollbarWidth: "none", justifyContent: "center", WebkitMaskImage: navOverflow ? "linear-gradient(90deg, #000 calc(100% - 30px), transparent)" : "none", maskImage: navOverflow ? "linear-gradient(90deg, #000 calc(100% - 30px), transparent)" : "none" }}>
-                {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "chat" as const, label: "Ask AI" }, { id: "practice" as const, label: "Interview Prep" }] as { id: Page; label: string }[]).map(item => (
+                {([{ id: "home" as const, label: "Home" }, { id: "analyze" as const, label: "Analyze" }, { id: "compare" as const, label: "Compare" }, { id: "playground" as const, label: "Playground" }, { id: "review" as const, label: "Review" }, { id: "chat" as const, label: "Ask AI" }, { id: "practice" as const, label: "Interview Prep" }] as { id: Page; label: string }[]).map(item => (
                   <button key={item.id} onClick={() => navigate(item.id)} style={{ padding: "8px 14px", whiteSpace: "nowrap", flexShrink: 0, borderRadius: 999, cursor: "pointer", fontSize: 13.5, fontWeight: page === item.id ? 600 : 500, color: page === item.id ? "#fff" : tk.text2, background: page === item.id ? (dark ? "rgba(255,255,255,0.16)" : "rgba(10,10,10,0.78)") : "transparent", backdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", WebkitBackdropFilter: page === item.id ? "blur(10px) saturate(160%)" : "none", border: page === item.id ? `1px solid ${dark ? "rgba(255,255,255,0.20)" : "rgba(255,255,255,0.22)"}` : "1px solid transparent", boxShadow: page === item.id ? "inset 0 1px 0 rgba(255,255,255,0.28), 0 4px 14px rgba(0,0,0,0.28)" : "none", transition: "all 0.15s" }}
                     onMouseEnter={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text; (e.currentTarget as HTMLElement).style.background = tk.bgAlt; } }}
                     onMouseLeave={e => { if (page !== item.id) { (e.currentTarget as HTMLElement).style.color = tk.text2; (e.currentTarget as HTMLElement).style.background = "transparent"; } }}>
