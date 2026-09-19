@@ -1249,16 +1249,30 @@ function UnverifiedNote({
 }
 
 /* ── Main component ── */
-export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; isMobile: boolean }) {
-  const [langSel, setLangSel] = useState("auto");
-  const [code, setCode] = useState("");
+/** Snapshot lifted to the parent so the Review tab survives tab switches. */
+export interface PersistedReviewState {
+  code: string;
+  langSel: string;
+  result: ReviewResult | null;
+  optimization: OptimizationResult | null;
+}
+
+export default function CodeReviewPage({ tk, isMobile, initial, onPersist }: {
+  tk: PlaygroundTheme;
+  isMobile: boolean;
+  /** Restored when remounting (tab switches). In-memory only — cleared on refresh. */
+  initial?: PersistedReviewState | null;
+  onPersist?: (s: PersistedReviewState) => void;
+}) {
+  const [langSel, setLangSel] = useState(initial?.langSel ?? "auto");
+  const [code, setCode] = useState(initial?.code ?? "");
   const [status, setStatus] = useState<Status>("idle");
-  const [result, setResult] = useState<ReviewResult | null>(null);
+  const [result, setResult] = useState<ReviewResult | null>(initial?.result ?? null);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [progress, setProgress] = useState<string | null>(null);
   const [fixedCopied, setFixedCopied] = useState(false);
-  const [optimization, setOptimization] = useState<OptimizationResult | null>(null);
+  const [optimization, setOptimization] = useState<OptimizationResult | null>(initial?.optimization ?? null);
   const [optStatus, setOptStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [optError, setOptError] = useState<string | null>(null);
   const [optCopied, setOptCopied] = useState(false);
@@ -1279,6 +1293,18 @@ export default function CodeReviewPage({ tk, isMobile }: { tk: PlaygroundTheme; 
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
+
+  // Persist editor + results to the parent on unmount (tab switch) so
+  // everything is restored when the tab remounts. Refs avoid stale closures.
+  const snapRef = useRef<PersistedReviewState>({ code: "", langSel: "auto", result: null, optimization: null });
+  snapRef.current = { code, langSel, result, optimization };
+  const persistRef = useRef(onPersist);
+  persistRef.current = onPersist;
+  useEffect(() => {
+    return () => {
+      persistRef.current?.({ ...snapRef.current });
     };
   }, []);
 

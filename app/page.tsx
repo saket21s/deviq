@@ -30,6 +30,7 @@ import {
 } from "@/lib/oauth";
 import PlaygroundPage from "@/components/PlaygroundPage";
 import CodeReviewPage from "@/components/CodeReviewPage";
+import type { PersistedReviewState } from "@/components/CodeReviewPage";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -4925,6 +4926,8 @@ export default function Page() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   // Chat thread lifted here so it survives tab switches (in-memory — cleared on refresh).
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  // Review editor + results lifted here so they survive tab switches (in-memory — cleared on refresh).
+  const [reviewState, setReviewState] = useState<PersistedReviewState | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
 
@@ -6303,7 +6306,7 @@ export default function Page() {
           )}
 
           {/* REVIEW — AI code review (login required, like chat/practice) */}
-          {page === "review" && user && <CodeReviewPage tk={tk} isMobile={isMobile} />}
+          {page === "review" && user && <CodeReviewPage tk={tk} isMobile={isMobile} initial={reviewState} onPersist={setReviewState} />}
           {page === "review" && !user && (
             <div style={{ padding: "80px 0", textAlign: "center" }}>
               <div style={{ fontSize: 14, color: tk.text3, marginBottom: 16 }}>Sign in to get AI code reviews.</div>
