@@ -290,6 +290,18 @@ function resolveBackend(): string {
 
 const BACKEND = resolveBackend();
 
+/** Auth headers for direct backend fetches (mirrors serverRequest). */
+function backendAuthHeaders(): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  try {
+    const tok = typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
+    if (tok) h["Authorization"] = `Bearer ${tok}`;
+  } catch {
+    // storage unavailable — proceed unauthenticated, backend will 401
+  }
+  return h;
+}
+
 function normalizeAvatarUrl(url?: string): string | undefined {
   const raw = (url || "").trim();
   if (!raw || raw.length > 2000) return undefined;
@@ -893,15 +905,15 @@ function useCounter(target: number, duration = 1400): number {
 /* ─────────────────────────────────────────────────
    SCORE RING
 ───────────────────────────────────────────────── */
-function ScoreRing({ score, tk, size = 140 }: { score: number; tk: Theme; size?: number }) {
+function ScoreRing({ score, tk, size = 140, stroke = 3 }: { score: number; tk: Theme; size?: number; stroke?: number }) {
   const c = useCounter(Math.round(score));
   const R = size * 0.38, circ = 2 * Math.PI * R, cx = size / 2;
   const color = c >= 80 ? tk.green : c >= 60 ? tk.blue : c >= 40 ? tk.amber : tk.rose;
   return (
     <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: "rotate(-90deg)", display: "block" }}>
-        <circle cx={cx} cy={cx} r={R} fill="none" stroke={tk.track} strokeWidth="3" />
-        <circle cx={cx} cy={cx} r={R} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={circ * (1 - c / 100)} style={{ transition: "stroke-dashoffset 1.4s cubic-bezier(0.4,0,0.2,1)" }} />
+        <circle cx={cx} cy={cx} r={R} fill="none" stroke={tk.track} strokeWidth={stroke} />
+        <circle cx={cx} cy={cx} r={R} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={circ * (1 - c / 100)} style={{ transition: "stroke-dashoffset 1.4s cubic-bezier(0.4,0,0.2,1)" }} />
       </svg>
       <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
         <span style={{ fontSize: size * 0.25, fontWeight: 600, color, lineHeight: 1, fontVariantNumeric: "tabular-nums", letterSpacing: "-0.03em" }}>{c}</span>
@@ -2071,10 +2083,11 @@ Combined DevIQ Score: ${data.combined_score}/100`;
     try {
       const response = await fetch(`${BACKEND}/ai/insights`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: backendAuthHeaders(),
         body: JSON.stringify({ prompt: PROMPTS[m] })
       });
-      
+
+      if (response.status === 401) throw new Error('Session expired — please log out and log in again');
       if (!response.ok) throw new Error('AI request failed');
       
       const data = await response.json();
@@ -2101,7 +2114,7 @@ Combined DevIQ Score: ${data.combined_score}/100`;
     try {
       const response = await fetch(`${BACKEND}/ai/insights`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: backendAuthHeaders(),
         body: JSON.stringify({ prompt: `Translate the following text to Hindi. Keep formatting (bold markers **, bullet points •) intact. Only translate the text:\n\n${current}` })
       });
       if (!response.ok) throw new Error('Translation failed');
@@ -2115,34 +2128,12 @@ Combined DevIQ Score: ${data.combined_score}/100`;
     }
   };
 
-  const renderText = (text: string) => {
-    return text.split("\n").map((line, i) => {
-      if (line.startsWith("**") && line.includes(":**")) {
-        const [label, ...rest] = line.split(":**");
-        return (
-          <div key={i} style={{ marginBottom: 10 }}>
-            <span style={{ fontWeight: 700, color: tk.text }}>{label.replace(/\*\*/g, "")}:</span>
-            <span style={{ color: tk.text2 }}>{rest.join(":")}</span>
-          </div>
-        );
-      }
-      if (line.startsWith("•") || line.startsWith("- ")) {
-        return <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, paddingLeft: 4 }}>
-          <span style={{ color: modeInfo.color, flexShrink: 0, marginTop: 1 }}>•</span>
-          <span style={{ color: tk.text2, lineHeight: 1.65 }}>{line.replace(/^[•-]\s*/, "")}</span>
-        </div>;
-      }
-      if (line.trim() === "") return <div key={i} style={{ height: 6 }} />;
-      return <p key={i} style={{ color: tk.text2, lineHeight: 1.65, marginBottom: 6 }}>{line}</p>;
-    });
-  };
-
   return (
     <div id="sec-ai" style={{ background: tk.surface, borderRadius: 12, border: `1px solid ${tk.border}`, overflow: "hidden", boxShadow: tk.shadowMd, marginBottom: 8 }}>
       {/* Header */}
       <div style={{ padding: "14px 20px", borderBottom: `1px solid ${tk.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 28, height: 28, borderRadius: 7, background: `${modeInfo.color}20`, border: `1px solid ${modeInfo.color}40`, transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={modeInfo.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3L13.5 9H19.5L14.5 13L16.5 19L12 15.5L7.5 19L9.5 13L4.5 9H10.5L12 3Z" /></svg></div>
+          <div style={{ width: 28, height: 28, borderRadius: 7, background: `${modeInfo.color}20`, border: `1px solid ${modeInfo.color}40`, transition: "all 0.2s", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={modeInfo.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" /><rect x="10" y="10" width="4" height="4" /><line x1="9" y1="2" x2="9" y2="6" /><line x1="15" y1="2" x2="15" y2="6" /><line x1="9" y1="18" x2="9" y2="22" /><line x1="15" y1="18" x2="15" y2="22" /><line x1="2" y1="9" x2="6" y2="9" /><line x1="2" y1="15" x2="6" y2="15" /><line x1="18" y1="9" x2="22" y2="9" /><line x1="18" y1="15" x2="22" y2="15" /></svg></div>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, color: tk.text, lineHeight: 1.2 }}>AI Insights</div>
             <div style={{ fontSize: 11, color: tk.text3 }}>{modeInfo.desc}</div>
@@ -2150,18 +2141,18 @@ Combined DevIQ Score: ${data.combined_score}/100`;
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {current && !isLoading && (
-            <button onClick={copyText} style={{ padding: "4px 10px", borderRadius: 5, border: `1px solid ${tk.border}`, background: copied ? tk.greenLight : "transparent", cursor: "pointer", fontSize: 11, fontWeight: 500, color: copied ? tk.green : tk.text3, fontFamily: "inherit", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 4 }}>
+            <button onClick={copyText} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: copied ? tk.greenLight : "transparent", cursor: "pointer", fontSize: 11, fontWeight: 500, color: copied ? tk.green : tk.text3, fontFamily: "inherit", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 4 }}>
               {copied ? <>✓ Copied</> : <><svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>Copy</>}
             </button>
           )}
           {current && !isLoading && (
-            <button onClick={translateToHindi} disabled={translating} style={{ padding: "4px 10px", borderRadius: 5, border: `1px solid ${tk.border}`, background: showHindi[mode] ? tk.purpleLight : "transparent", cursor: "pointer", fontSize: 11, fontWeight: 500, color: showHindi[mode] ? tk.purple : tk.text3, fontFamily: "inherit", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 4 }}>
+            <button onClick={translateToHindi} disabled={translating} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: showHindi[mode] ? tk.purpleLight : "transparent", cursor: "pointer", fontSize: 11, fontWeight: 500, color: showHindi[mode] ? tk.purple : tk.text3, fontFamily: "inherit", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 4 }}>
               {translating ? <div style={{ width: 9, height: 9, border: `1.5px solid ${tk.purple}`, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.6s linear infinite" }} /> : <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 8l6 6" /><path d="M4 14l6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="M22 22l-5-10-5 10" /><path d="M14 18h6" /></svg>}
               {showHindi[mode] ? "Show English" : "हिंदी"}
             </button>
           )}
           {current && !isLoading && (
-            <button onClick={() => call(mode)} style={{ padding: "4px 10px", borderRadius: 5, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 11, fontWeight: 500, color: tk.text3, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
+            <button onClick={() => call(mode)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${tk.border}`, background: "transparent", cursor: "pointer", fontSize: 11, fontWeight: 500, color: tk.text3, fontFamily: "inherit", display: "flex", alignItems: "center", gap: 4 }}>
               <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-3.62" /></svg>Retry
             </button>
           )}
@@ -2169,28 +2160,30 @@ Combined DevIQ Score: ${data.combined_score}/100`;
       </div>
 
       {/* Mode tabs */}
-      <div style={{ display: "flex", gap: 0, overflowX: "auto", borderBottom: `1px solid ${tk.border}`, scrollbarWidth: "none" }}>
-        {AI_MODES.map((m) => {
-          const isActive = mode === m.id;
-          const isDone = !!results[m.id];
-          const isRunning = loading === m.id;
-          return (
-            <button key={m.id} onClick={() => { setMode(m.id); if (!results[m.id] && loading !== m.id) call(m.id); }}
-              style={{ flex: "0 0 auto", padding: "10px 16px", border: "none", borderBottom: isActive ? `2px solid ${m.color}` : "2px solid transparent", background: isActive ? `${m.color}10` : "transparent", cursor: "pointer", fontSize: 12, fontWeight: isActive ? 600 : 400, color: isActive ? m.color : tk.text3, fontFamily: "inherit", transition: "all 0.15s", display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" as const }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: m.color, flexShrink: 0 }} />
-              {m.label}
-              {isRunning && <span style={{ width: 6, height: 6, borderRadius: "50%", border: `1.5px solid ${m.color}`, borderTopColor: "transparent", animation: "spin 0.6s linear infinite", display: "inline-block" }} />}
-              {isDone && !isRunning && <span style={{ width: 5, height: 5, borderRadius: "50%", background: m.color, opacity: 0.7 }} />}
-            </button>
-          );
-        })}
+      <div style={{ padding: "10px 14px", borderBottom: `1px solid ${tk.border}` }}>
+        <div className="nav-scroll" style={{ display: "flex", gap: 4, overflowX: "auto", background: tk.bgAlt, borderRadius: 13, padding: 4, scrollbarWidth: "none" }}>
+          {AI_MODES.map((m) => {
+            const isActive = mode === m.id;
+            const isDone = !!results[m.id];
+            const isRunning = loading === m.id;
+            return (
+              <button key={m.id} onClick={() => { setMode(m.id); if (!results[m.id] && loading !== m.id) call(m.id); }}
+                style={{ flex: "0 0 auto", padding: "8px 15px", borderRadius: 9, border: "none", background: isActive ? tk.surface : "transparent", boxShadow: isActive ? tk.shadow : "none", cursor: "pointer", fontSize: 12.5, fontWeight: isActive ? 700 : 500, color: isActive ? m.color : tk.text3, fontFamily: "inherit", transition: "all 0.18s", display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" as const }}>
+                <span style={{ width: 7, height: 7, borderRadius: "50%", background: m.color, opacity: isActive ? 1 : 0.45, flexShrink: 0 }} />
+                {m.label}
+                {isRunning && <span style={{ width: 11, height: 11, borderRadius: "50%", border: `2px solid ${m.color}`, borderTopColor: "transparent", animation: "spin 0.6s linear infinite", display: "inline-block", flexShrink: 0 }} />}
+                {isDone && !isRunning && <span style={{ fontSize: 11, color: m.color, fontWeight: 700 }}>✓</span>}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Content */}
       <div style={{ padding: "20px", minHeight: 160 }}>
         {!current && !isLoading && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px 0", gap: 14 }}>
-            <div style={{ width: 48, height: 48, borderRadius: 12, background: `${modeInfo.color}15`, border: `1px solid ${modeInfo.color}30` }} />
+            <div style={{ width: 48, height: 48, borderRadius: 12, background: `${modeInfo.color}15`, border: `1px solid ${modeInfo.color}30`, display: "flex", alignItems: "center", justifyContent: "center" }}><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={modeInfo.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3L13.5 9H19.5L14.5 13L16.5 19L12 15.5L7.5 19L9.5 13L4.5 9H10.5L12 3Z" /></svg></div>
             <div style={{ textAlign: "center" as const }}>
               <div style={{ fontSize: 14, fontWeight: 600, color: tk.text, marginBottom: 4 }}>{modeInfo.label}</div>
               <div style={{ fontSize: 13, color: tk.text3, lineHeight: 1.5 }}>{modeInfo.desc}</div>
@@ -2203,15 +2196,21 @@ Combined DevIQ Score: ${data.combined_score}/100`;
         )}
 
         {isLoading && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 0" }}>
-            <span style={{ width: 16, height: 16, borderRadius: "50%", border: `2px solid ${modeInfo.color}`, borderTopColor: "transparent", animation: "spin 0.6s linear infinite", display: "inline-block", flexShrink: 0 }} />
-            <span style={{ fontSize: 13, color: tk.text3 }}>Groq is thinking…</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "10px 0 4px" }}>
+            <div style={{ height: 13, borderRadius: 7, width: "38%", background: tk.bgAlt, animation: "shimmer 1.2s ease-in-out infinite" }} />
+            <div style={{ height: 13, borderRadius: 7, width: "94%", background: tk.bgAlt, animation: "shimmer 1.2s ease-in-out infinite", animationDelay: "0.15s" }} />
+            <div style={{ height: 13, borderRadius: 7, width: "87%", background: tk.bgAlt, animation: "shimmer 1.2s ease-in-out infinite", animationDelay: "0.3s" }} />
+            <div style={{ height: 13, borderRadius: 7, width: "62%", background: tk.bgAlt, animation: "shimmer 1.2s ease-in-out infinite", animationDelay: "0.45s" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+              <span style={{ width: 13, height: 13, borderRadius: "50%", border: `2px solid ${modeInfo.color}`, borderTopColor: "transparent", animation: "spin 0.6s linear infinite", display: "inline-block", flexShrink: 0 }} />
+              <span style={{ fontSize: 12, color: tk.text3 }}>Groq is thinking…</span>
+            </div>
           </div>
         )}
 
         {current && !isLoading && (
-          <div style={{ fontSize: 14, color: tk.text, lineHeight: 1.75, padding: "16px 18px", background: tk.bgAlt, borderRadius: 9, border: `1px solid ${tk.border}` }}>
-            {showHindi[mode] && translated[mode] ? renderText(translated[mode]) : renderText(current)}
+          <div key={`ai-out-${mode}-${showHindi[mode] ? "hi" : "en"}`} style={{ padding: "6px 20px 10px", fontSize: 14, lineHeight: 1.7, color: tk.text, animation: "fadeUp 0.35s cubic-bezier(0.4,0,0.2,1) both" }}>
+            {showHindi[mode] && translated[mode] ? <ChatMarkdown text={translated[mode]} tk={tk} /> : <ChatMarkdown text={current} tk={tk} />}
           </div>
         )}
       </div>
@@ -3539,13 +3538,13 @@ function ChatMarkdown({ text, tk }: { text: string; tk: Theme }) {
           i++;
         }
         els.push(
-          <div key={`${keyPrefix}-${i}`} style={{ display: "flex", flexDirection: "column", gap: 6, margin: "8px 0" }}>
+          <div key={`${keyPrefix}-${i}`} style={{ display: "flex", flexDirection: "column", gap: 10, margin: "10px 0" }}>
             {items.map((it, k) => (
-              <div key={k} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+              <div key={k} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                 {it.ordered
-                  ? <span style={{ fontSize: 12.5, fontWeight: 700, color: tk.blue, minWidth: 18, textAlign: "right", marginTop: 1 }}>{it.num}.</span>
-                  : <span style={{ color: tk.blue, flexShrink: 0, marginTop: 1, fontSize: 13 }}>•</span>}
-                <span style={{ color: tk.text2, lineHeight: 1.65, fontSize: 13.5 }}><ChatInline text={it.text} tk={tk} /></span>
+                  ? <span style={{ fontSize: 13, fontWeight: 700, color: tk.blue, minWidth: 20, textAlign: "right", marginTop: 1 }}>{it.num}.</span>
+                  : <span style={{ color: tk.blue, flexShrink: 0, marginTop: 2, fontSize: 14, lineHeight: 1 }}>•</span>}
+                <span style={{ color: tk.text, lineHeight: 1.7, fontSize: 14 }}><ChatInline text={it.text} tk={tk} /></span>
               </div>
             ))}
           </div>
@@ -3561,7 +3560,7 @@ function ChatMarkdown({ text, tk }: { text: string; tk: Theme }) {
         );
         i++; continue;
       }
-      els.push(<p key={`${keyPrefix}-${i}`} style={{ color: tk.text2, lineHeight: 1.7, margin: "0 0 8px", fontSize: 13.5 }}><ChatInline text={t} tk={tk} /></p>);
+      els.push(<p key={`${keyPrefix}-${i}`} style={{ color: tk.text, lineHeight: 1.7, margin: "0 0 10px", fontSize: 14 }}><ChatInline text={t} tk={tk} /></p>);
       i++;
     }
     return els;
@@ -3675,7 +3674,7 @@ function ChatPage({ user, profile, tk, isMobile, messages, setMessages }: {
 
       const response = await fetch(`${BACKEND}/ai/insights`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: backendAuthHeaders(),
         body: JSON.stringify({ prompt, conversation_history: historyForApi })
       });
 
@@ -6181,25 +6180,22 @@ export default function Page() {
             {errors.length > 0 && !loading && errors.map((e, i) => (<div key={i} style={{ padding: "9px 13px", borderRadius: 7, border: `1px solid ${tk.roseBorder}`, background: tk.roseLight, fontSize: 12, color: tk.rose, marginBottom: 7 }}>{e}</div>))}
             {data && !loading && (() => {
               const rank = getRank(data.combined_score, tk);
-              const scoreColor = data.combined_score >= 80 ? tk.green : data.combined_score >= 60 ? tk.blue : data.combined_score >= 40 ? tk.amber : tk.rose;
               return (<>
-                <div id="sec-score" className="fu" style={{ background: tk.surface, borderRadius: 10, border: `1px solid ${tk.border}`, marginBottom: 8, boxShadow: tk.shadowLg, overflow: "hidden" }}>
-                  <div style={{ height: 2, background: scoreColor }} />
-                  <div style={{ padding: isMobile ? "22px 18px" : "32px 36px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", gap: 28, alignItems: "center" }}>
+                <div id="sec-score" className="fu" style={{ background: tk.surface, borderRadius: 12, border: `1px solid ${tk.border}`, marginBottom: 8, boxShadow: tk.shadowLg, overflow: "hidden" }}>
+                  <div style={{ padding: isMobile ? "24px 20px" : "36px 40px", display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr auto", gap: 28, alignItems: "center" }}>
                     <div>
-                      <div style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: tk.text3, marginBottom: 12 }}>Analysis Report</div>
-                      <div style={{ fontSize: isMobile ? "clamp(18px,6vw,28px)" : "clamp(22px,3vw,34px)", fontWeight: 600, letterSpacing: "-0.04em", color: tk.text, marginBottom: 14, lineHeight: 1.1 }}>{[gh, lc, cf].filter(Boolean).join(" / ")}</div>
+                      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: tk.text3, marginBottom: 12 }}>Analysis Report</div>
+                      <div style={{ fontSize: isMobile ? "clamp(20px,6vw,30px)" : "clamp(24px,3vw,36px)", fontWeight: 700, letterSpacing: "-0.04em", color: tk.text, marginBottom: 14, lineHeight: 1.05 }}>{[gh, lc, cf].filter(Boolean).join(" / ")}</div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
                         {data.github && <span style={tagS(tk.blue, tk.blueLight, tk.blueBorder)}>GitHub</span>}
                         {data.leetcode && <span style={tagS(tk.amber, tk.amberLight, tk.amberBorder)}>LeetCode</span>}
                         {data.codeforces && <span style={tagS(tk.purple, tk.purpleLight, tk.purpleBorder)}>Codeforces</span>}
                         <span style={tagS(rank.color, rank.bg, rank.border)}>{rank.label}</span>
                       </div>
-                      <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.65, margin: 0, maxWidth: 480 }}>{getVerdict(data.combined_score)}</p>
+                      <p style={{ fontSize: 14, color: tk.text2, lineHeight: 1.7, margin: 0, maxWidth: 520 }}>{getVerdict(data.combined_score)}</p>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, ...(isMobile ? { order: -1 } : {}) }}>
-                      <ScoreRing score={data.combined_score} tk={tk} size={isMobile ? 112 : 144} />
-                      <span style={{ fontSize: 11, fontWeight: 500, color: rank.color }}>{rank.label}</span>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: 16, borderRadius: "50%", background: `radial-gradient(circle at center, ${rank.color}1F 0%, transparent 68%)`, ...(isMobile ? { order: -1 } : {}) }}>
+                      <ScoreRing score={data.combined_score} tk={tk} size={isMobile ? 124 : 164} stroke={4.5} />
                     </div>
                   </div>
                 </div>
