@@ -1,5 +1,6 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import dynamic from "next/dynamic";
 
 // Monaco (the VS Code editor) is heavy, so it loads only on this page,
@@ -84,6 +85,48 @@ interface TLine {
   kind: TLineKind;
   text: string;
 }
+
+/** Fixed terminal palette (theme-independent, like a real console). */
+function termLineStyle(kind: TLineKind): CSSProperties {
+  const mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  switch (kind) {
+    case "cmd":
+      return { color: "#7ee787", fontWeight: 700, fontFamily: mono };
+    case "in":
+      return { color: "#79c0ff", fontFamily: mono };
+    case "err":
+      return { color: "#ffa198", fontFamily: mono };
+    case "warn":
+      return { color: "#d29922", fontFamily: mono };
+    case "sys":
+      return { color: "#8b949e", fontStyle: "italic", fontFamily: mono };
+    default:
+      return { color: "#e6edf3", fontFamily: mono };
+  }
+}
+
+/**
+ * Memoized transcript rows: the `lines` array identity only changes when
+ * output is appended, so editor keystrokes skip re-rendering this subtree
+ * entirely (this was the main typing-lag source on long transcripts).
+ */
+const TranscriptLines = memo(function TranscriptLines({ lines }: { lines: TLine[] }) {
+  return (
+    <>
+      {lines.map((l) => (
+        <div key={l.id} style={termLineStyle(l.kind)}>
+          {l.kind === "in"
+            ? `> ${l.text}`
+            : l.kind === "sys"
+              ? `● ${l.text}`
+              : l.text === ""
+                ? " "
+                : l.text}
+        </div>
+      ))}
+    </>
+  );
+});
 
 /** Displayed run command per language (cosmetic, like a real shell). */
 const RUN_CMD: Record<string, string> = {
@@ -1471,23 +1514,8 @@ export default function PlaygroundPage({
         : "Type here if the program needs input, Enter to queue…";
 
   // Fixed palette: the terminal body is always dark, like a real console.
-  const lineStyle = (kind: TLineKind) => {
-    const mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    switch (kind) {
-      case "cmd":
-        return { color: "#7ee787", fontWeight: 700, fontFamily: mono };
-      case "in":
-        return { color: "#79c0ff", fontFamily: mono };
-      case "err":
-        return { color: "#ffa198", fontFamily: mono };
-      case "warn":
-        return { color: "#d29922", fontFamily: mono };
-      case "sys":
-        return { color: "#8b949e", fontStyle: "italic", fontFamily: mono };
-      default:
-        return { color: "#e6edf3", fontFamily: mono };
-    }
-  };
+  // Module-level + memoized below so keystroke re-renders skip the transcript.
+  const lineStyle = (kind: TLineKind) => termLineStyle(kind);
 
   return (
     <div style={{ paddingTop: 8 }}>
@@ -1966,17 +1994,7 @@ export default function PlaygroundPage({
                 )}
               </div>
             ) : (
-              transcript.map((l) => (
-                <div key={l.id} style={lineStyle(l.kind)}>
-                  {l.kind === "in"
-                    ? `> ${l.text}`
-                    : l.kind === "sys"
-                      ? `● ${l.text}`
-                      : l.text === ""
-                        ? " "
-                        : l.text}
-                </div>
-              ))
+              <TranscriptLines lines={transcript} />
             )}
             {waiting && (
               <div style={{ color: "#79c0ff", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>

@@ -16,17 +16,22 @@ const nextConfig: NextConfig = {
     // Pragmatic CSP: the app uses inline styles/scripts heavily, so
     // 'unsafe-inline' is required there, and the Monaco code editor needs
     // 'unsafe-eval' for its web workers (blocking it breaks the playground).
-    // Documented limitation: the policy still blocks unauthorized external
-    // scripts, plugins, frames, and constrains network/image/worker targets
-    // to reduce exfiltration paths.
+    // Monaco itself loads its scripts, workers, icon font, AND stylesheet
+    // from the pinned jsDelivr CDN (see components/CodeEditor.tsx), so that
+    // origin is allowlisted below — and nowhere else. Blocking any one of
+    // these leaves a half-styled editor with broken overlays that eat clicks.
+    // Documented limitation: the policy still blocks all other external
+    // scripts, plugins, frames, and constrains network/image targets to
+    // reduce exfiltration paths.
+    const MONACO_CDN = "https://cdn.jsdelivr.net";
     const csp = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "font-src 'self' https://fonts.gstatic.com data:",
+      `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${MONACO_CDN}`,
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net",
+      `font-src 'self' https://fonts.gstatic.com data: ${MONACO_CDN}`,
       "img-src 'self' data: blob: https:",
-      "connect-src 'self' https://api.github.com http://localhost:* https://*.onrender.com",
-      "worker-src 'self' blob:",
+      "connect-src 'self' https://api.github.com http://localhost:* https://*.onrender.com https://cdn.jsdelivr.net",
+      `worker-src 'self' blob: ${MONACO_CDN}`,
       "object-src 'none'",
       "base-uri 'self'",
       "frame-ancestors 'self'",

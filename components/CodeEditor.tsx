@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Editor, { loader, type OnMount } from "@monaco-editor/react";
 
 // Pin a known-good Monaco build so the editor never breaks on a bad CDN day.
@@ -39,6 +39,19 @@ export default function CodeEditor({
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
 
+  // If the Monaco CDN can't load (offline/blocked scripts), don't hang on
+  // the spinner forever — surface a retry instead of a dead editor.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = false;
+    setLoadFailed(false);
+    const t = setTimeout(() => {
+      if (!mountedRef.current) setLoadFailed(true);
+    }, 20000);
+    return () => clearTimeout(t);
+  }, [language]);
+
   // Remind screen readers / keyboard users of the run shortcut.
   useEffect(() => {
     const el = document.getElementById("deviq-code-editor");
@@ -46,11 +59,50 @@ export default function CodeEditor({
   }, []);
 
   const handleMount: OnMount = (editor, monaco) => {
+    mountedRef.current = true;
     // Ctrl/Cmd + Enter runs the code, same as before.
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       onRunRef.current();
     });
   };
+
+  if (loadFailed) {
+    return (
+      <div id="deviq-code-editor" style={{ height, minHeight: 380 }}>
+        <div
+          style={{
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
+            fontSize: 13,
+            color: "#888",
+            textAlign: "center",
+            padding: 20,
+          }}
+        >
+          <div>Editor failed to load. Check your connection, then retry.</div>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: "8px 20px",
+              borderRadius: 8,
+              border: "1px solid #444",
+              background: "transparent",
+              color: "#fff",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div id="deviq-code-editor" style={{ height, minHeight: 380 }}>
@@ -78,7 +130,7 @@ export default function CodeEditor({
         options={{
           minimap: { enabled: false },
           fontSize: 13,
-          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+          fontFamily: "Menlo, Monaco, 'Courier New', monospace",
           lineNumbers: "on",
           roundedSelection: false,
           scrollBeyondLastLine: false,
@@ -95,7 +147,6 @@ export default function CodeEditor({
           cursorSmoothCaretAnimation: "on",
           bracketPairColorization: { enabled: true },
           guides: { bracketPairs: true },
-          fixedOverflowWidgets: true,
           scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
           stickyScroll: { enabled: false },
           contextmenu: true,
