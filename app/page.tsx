@@ -18,6 +18,7 @@ import {
   initiateGithubLogin,
   exchangeCodeForToken,
   claimPendingOAuth,
+  claimOAuthError,
   PENDING_OAUTH_KEY,
   PENDING_OAUTH_LOCAL_KEY,
   verifyStateForProvider,
@@ -31,6 +32,14 @@ import {
 import PlaygroundPage from "@/components/PlaygroundPage";
 import CodeReviewPage from "@/components/CodeReviewPage";
 import type { PersistedReviewState } from "@/components/CodeReviewPage";
+import dynamic from "next/dynamic";
+
+// Problem solver (editor + test cases + AI) loads on demand with Interview
+// Prep, never in the main bundle — Monaco is heavy.
+const ProblemSolver = dynamic(() => import("@/components/ProblemSolver"), {
+  ssr: false,
+  loading: () => <div style={{ padding: 40, textAlign: "center", fontSize: 13, color: "#888" }}>Loading solver…</div>,
+});
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -179,6 +188,7 @@ interface SolvedProblem {
 interface WeakCategory {
   tag: string; totalProblems: number; solvedProblems: number; accuracy: number;
   difficulties: { Easy: number; Medium: number; Hard: number };
+  slug?: string; level?: string; source?: "live";
 }
 interface CompanyProblem {
   id: string; title: string; slug: string; difficulty: "Easy" | "Medium" | "Hard";
@@ -3876,9 +3886,17 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   const p = profile;
   const [recommendedProblem, setRecommendedProblem] = useState<LeetCodeProblem | null>(null);
   const [weakCategories, setWeakCategories] = useState<WeakCategory[]>([]);
+  const [showAllWeak, setShowAllWeak] = useState(false);
   const [solvedProblems, setSolvedProblems] = useState<SolvedProblem[]>(p?.solvedProblems || []);
   const [loading, setLoading] = useState(false);
   const [leetcodeUsername, setLeetcodeUsername] = useState("");
+
+  // Problem solver view: which question the user is solving, if any.
+  const [solving, setSolving] = useState<{
+    title: string; slug: string; difficulty: "Easy" | "Medium" | "Hard";
+    topicTags?: string[]; url?: string; company: string | null;
+    autoSolution: boolean;
+  } | null>(null);
 
   // ── Company Tags state ──
   const [companyList, setCompanyList] = useState<CompanyInfo[]>([]);
@@ -3899,93 +3917,57 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
   const fetchAndAnalyzeLeetCode = useCallback(async (username: string) => {
     if (!username.trim()) return;
     setLoading(true);
+    // Clear any previously cached categories so stale mock data never shows.
+    setWeakCategories([]);
+    setRecommendedProblem(null);
     try {
-      // Try to fetch from backend first, fallback to mock data if unavailable
-      let categories: WeakCategory[] = [];
-      let recommendedProblem: LeetCodeProblem | null = null;
+      const res = await fetch(`${BACKEND}/leetcode/${encodeURIComponent(username.trim())}`);
+      if (!res.ok) {
+        if (res.status === 404) throw new Error(`LeetCode user '${username.trim()}' not found.`);
+        throw new Error(`LeetCode lookup failed (${res.status}). Try again in a moment.`);
+      }
+      const data = await res.json();
+      const topics: { tag: string; slug: string; solved: number; level: string }[] =
+        Array.isArray(data.topic_stats) ? data.topic_stats : [];
 
-      try {
-        // Attempt to use backend API
-        const res = await fetch(`${BACKEND}/analyze?leetcode=${encodeURIComponent(username)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.leetcode) {
-            const problemStats = data.leetcode.problem_tags || {};
-            for (const [tag, stats] of Object.entries(problemStats)) {
-              const tagStats = stats as any;
-              const solved = tagStats.solved || 0;
-              const total = tagStats.total || solved + (tagStats.unsolved || 0);
-
-              categories.push({
-                tag,
-                totalProblems: total,
-                solvedProblems: solved,
-                accuracy: total > 0 ? Math.round((solved / total) * 100) : 0,
-                difficulties: {
-                  Easy: tagStats.easy_solved || 0,
-                  Medium: tagStats.medium_solved || 0,
-                  Hard: tagStats.hard_solved || 0
-                }
-              });
-            }
-          }
-        }
-      } catch (backendError) {
-        // Backend unavailable, use mock data
-
+      if (topics.length === 0) {
+        throw new Error(`No solved-problem data found for '${username.trim()}'. Solve at least one problem first.`);
       }
 
-      // If we didn't get categories from backend, use realistic mock data
-      if (categories.length === 0) {
-        categories = [
-          { tag: "Dynamic Programming", totalProblems: 45, solvedProblems: 18, accuracy: 40, difficulties: { Easy: 5, Medium: 13, Hard: 27 } },
-          { tag: "Graphs", totalProblems: 40, solvedProblems: 12, accuracy: 30, difficulties: { Easy: 8, Medium: 16, Hard: 16 } },
-          { tag: "Arrays & Hashing", totalProblems: 60, solvedProblems: 35, accuracy: 58, difficulties: { Easy: 20, Medium: 30, Hard: 10 } },
-          { tag: "Strings", totalProblems: 35, solvedProblems: 22, accuracy: 63, difficulties: { Easy: 12, Medium: 18, Hard: 5 } },
-          { tag: "Trees", totalProblems: 50, solvedProblems: 28, accuracy: 56, difficulties: { Easy: 15, Medium: 25, Hard: 10 } },
-          { tag: "Linked Lists", totalProblems: 30, solvedProblems: 15, accuracy: 50, difficulties: { Easy: 10, Medium: 15, Hard: 5 } },
-          { tag: "Binary Search", totalProblems: 25, solvedProblems: 8, accuracy: 32, difficulties: { Easy: 8, Medium: 12, Hard: 5 } },
-          { tag: "Sliding Window", totalProblems: 20, solvedProblems: 12, accuracy: 60, difficulties: { Easy: 8, Medium: 10, Hard: 2 } }
-        ];
-      }
-
-      // Sort by accuracy to find weakest
-      categories.sort((a, b) => a.accuracy - b.accuracy);
+      // Weakest = fewest solved (already sorted ascending by the backend).
+      const categories: WeakCategory[] = topics.map((t) => ({
+        tag: t.tag,
+        slug: t.slug,
+        level: t.level,
+        source: "live" as const,
+        totalProblems: t.solved,
+        solvedProblems: t.solved,
+        accuracy: 0,
+        difficulties: { Easy: 0, Medium: 0, Hard: 0 },
+      }));
       setWeakCategories(categories);
 
-      // Find a problem to recommend from weakest category
-      if (categories.length > 0) {
-        const weakestTag = categories[0].tag;
-        const difficultyList = ["Easy", "Medium", "Hard"] as const;
-        let selectedDifficulty: typeof difficultyList[number] = "Medium";
-
-        // Choose difficulty based on accuracy
-        if (categories[0].accuracy < 30) {
-          selectedDifficulty = categories[0].difficulties.Hard > 0 ? "Hard" : "Medium";
-        } else if (categories[0].accuracy < 50) {
-          selectedDifficulty = "Medium";
-        } else {
-          selectedDifficulty = "Easy";
-        }
-
-        recommendedProblem = {
-          id: `lc_${Date.now()}`,
-          title: `${weakestTag} Problem`,
-          difficulty: selectedDifficulty as "Easy" | "Medium" | "Hard",
-          topicTags: [weakestTag],
-          slugTitle: weakestTag.toLowerCase().replace(/\s+/g, "-"),
-          url: `https://leetcode.com/problems/?topicTags=${encodeURIComponent(weakestTag)}`
-        };
-        setRecommendedProblem(recommendedProblem);
-      }
+      // Recommend practice in the weakest topic — a real LeetCode topic page.
+      const weakest = topics[0];
+      const levelToDifficulty = { fundamental: "Easy", intermediate: "Medium", advanced: "Hard" } as const;
+      const recommended: LeetCodeProblem = {
+        id: `lc_${weakest.slug}`,
+        title: `${weakest.tag} Practice`,
+        difficulty: levelToDifficulty[weakest.level as keyof typeof levelToDifficulty] || "Medium",
+        topicTags: [weakest.tag],
+        slugTitle: weakest.slug,
+        url: `https://leetcode.com/tag/${weakest.slug}/`,
+      };
+      setRecommendedProblem(recommended);
 
       // Update profile with weak categories
       if (p) {
         const updatedProfile: UserProfile = {
           ...p,
+          leetcodeUsername: username.trim(),
           solvedProblems: solvedProblems,
           weakCategories: categories,
-          lastPracticeProblem: recommendedProblem || undefined
+          lastPracticeProblem: recommended
         };
         onProfileSave(updatedProfile);
       }
@@ -3999,7 +3981,8 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
   useEffect(() => {
     if (p?.weakCategories) {
-      setWeakCategories(p.weakCategories);
+      // Only hydrate live backend data — drops any stale placeholder entries.
+      setWeakCategories(p.weakCategories.filter((c) => c.source === "live"));
     }
     if (p?.solvedProblems) {
       setSolvedProblems(p.solvedProblems);
@@ -4150,6 +4133,37 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
   const companySolvedCount = (slug: string) => (companyTracking[slug] || []).length;
 
+  // Solver view: clicking a question opens its playground.
+  if (solving) {
+    const isCompany = solving.company !== null;
+    const isSolved = isCompany
+      ? (companyTracking[solving.company as string] || []).includes(solving.slug)
+      : solvedProblems.some((sp) => sp.id === `lc_${solving.slug}`);
+    return (
+      <div className="fu">
+        <div style={{ padding: isMobile ? "36px 0 28px" : "56px 0 40px" }}>
+          <ProblemSolver
+            problem={solving}
+            backend={BACKEND}
+            tk={tk}
+            dark={dark}
+            isMobile={isMobile}
+            solved={isSolved}
+            autoShowSolution={solving.autoSolution}
+            onBack={() => setSolving(null)}
+            onSolved={() => {
+              if (isCompany) {
+                toggleCompanyProblemSolved(solving.company as string, solving.slug);
+              } else if (recommendedProblem && !solvedProblems.some((sp) => sp.id === recommendedProblem.id)) {
+                markProblemSolved(recommendedProblem);
+              }
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fu">
       <div style={{ padding: isMobile ? "36px 0 28px" : "56px 0 40px", borderBottom: `1px solid ${tk.border}`, marginBottom: 24 }}>
@@ -4215,13 +4229,36 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                   </span>
                 ))}
               </div>
-              <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.4, margin: 0 }}>This problem is in your weakest category. Solving it will help improve your overall score.</p>
+              <p style={{ fontSize: 13, color: tk.text2, lineHeight: 1.4, margin: 0 }}>This is your least-practiced topic on LeetCode. Work through its problem list to close the gap.</p>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" as const }}>
             <a href={recommendedProblem.url} target="_blank" rel="noopener noreferrer" style={{ padding: "10px 20px", borderRadius: 8, background: tk.accent, color: tk.accentFg, textDecoration: "none", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
               Solve on LeetCode →
             </a>
+            <button
+              onClick={() => setSolving({
+                title: recommendedProblem.title,
+                slug: recommendedProblem.slugTitle,
+                difficulty: recommendedProblem.difficulty,
+                topicTags: recommendedProblem.topicTags,
+                url: recommendedProblem.url,
+                company: null,
+                autoSolution: false,
+              })}
+              style={{
+                padding: "10px 20px",
+                borderRadius: 8,
+                border: `1.5px solid ${tk.green}`,
+                background: tk.greenLight,
+                color: tk.green,
+                cursor: "pointer",
+                fontSize: 14,
+                fontWeight: 700
+              }}
+            >
+              Practice here
+            </button>
             <button
               onClick={() => {
                 markProblemSolved(recommendedProblem);
@@ -4246,38 +4283,85 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
       {/* Weak Categories */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.06em", marginBottom: 12 }}>Your Weak Categories</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: tk.text3, textTransform: "uppercase" as const, letterSpacing: "0.06em" }}>
+            Your Weak Categories{weakCategories.length > 0 && ` (weakest ${Math.min(showAllWeak ? weakCategories.length : 6, weakCategories.length)} of ${weakCategories.length})`}
+          </div>
+          {weakCategories.length > 6 && (
+            <button
+              onClick={() => setShowAllWeak((s) => !s)}
+              style={{ background: "none", border: "none", color: tk.blue, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0 }}
+            >
+              {showAllWeak ? "Show less ▲" : `Show all ${weakCategories.length} ▼`}
+            </button>
+          )}
+        </div>
         {weakCategories.length === 0 ? (
           <div style={{ padding: 20, background: tk.bgAlt, borderRadius: 8, textAlign: "center", color: tk.text3 }}>
             Enter your LeetCode username to see your weak categories.
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-            {weakCategories.map((cat, i) => (
-              <div key={cat.tag} style={{ padding: 16, background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 10 }}>
-                <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", marginBottom: 12 }}>
-                  <div>
-                    <h3 style={{ fontSize: 14, fontWeight: 600, color: tk.text, margin: 0, marginBottom: 4 }}>{cat.tag}</h3>
-                    <div style={{ fontSize: 12, color: tk.text3, marginBottom: 8 }}>{cat.solvedProblems} of {cat.totalProblems} solved</div>
-                  </div>
-                  <div style={{ fontSize: 24, fontWeight: 700, color: cat.accuracy < 30 ? tk.rose : cat.accuracy < 60 ? tk.amber : tk.green }}>
-                    {cat.accuracy}%
-                  </div>
-                </div>
+            {(() => {
+              const live = weakCategories[0]?.source === "live";
+              const maxSolved = live ? Math.max(...weakCategories.map((c) => c.solvedProblems), 1) : 1;
+              const visible = showAllWeak ? weakCategories : weakCategories.slice(0, 6);
+              return visible.map((cat, vi) => {
+                const i = vi;
+                if (!live) {
+                  return (
+                    <div key={cat.tag} style={{ padding: 16, background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 10 }}>
+                      <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", marginBottom: 12 }}>
+                        <div>
+                          <h3 style={{ fontSize: 14, fontWeight: 600, color: tk.text, margin: 0, marginBottom: 4 }}>{cat.tag}</h3>
+                          <div style={{ fontSize: 12, color: tk.text3, marginBottom: 8 }}>{cat.solvedProblems} of {cat.totalProblems} solved</div>
+                        </div>
+                        <div style={{ fontSize: 24, fontWeight: 700, color: cat.accuracy < 30 ? tk.rose : cat.accuracy < 60 ? tk.amber : tk.green }}>
+                          {cat.accuracy}%
+                        </div>
+                      </div>
 
-                {/* Progress bar */}
-                <div style={{ height: 6, background: tk.bgAlt, borderRadius: 3, marginBottom: 12, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${cat.accuracy}%`, background: cat.accuracy < 30 ? tk.rose : cat.accuracy < 60 ? tk.amber : tk.green, borderRadius: 3, transition: "width 0.3s" }} />
-                </div>
+                      {/* Progress bar */}
+                      <div style={{ height: 6, background: tk.bgAlt, borderRadius: 3, marginBottom: 12, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${cat.accuracy}%`, background: cat.accuracy < 30 ? tk.rose : cat.accuracy < 60 ? tk.amber : tk.green, borderRadius: 3, transition: "width 0.3s" }} />
+                      </div>
 
-                {/* Difficulty breakdown */}
-                <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
-                  <span style={{ color: tk.green }}>E: {cat.difficulties.Easy}</span>
-                  <span style={{ color: tk.amber }}>M: {cat.difficulties.Medium}</span>
-                  <span style={{ color: tk.rose }}>H: {cat.difficulties.Hard}</span>
-                </div>
-              </div>
-            ))}
+                      {/* Difficulty breakdown */}
+                      <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
+                        <span style={{ color: tk.green }}>E: {cat.difficulties.Easy}</span>
+                        <span style={{ color: tk.amber }}>M: {cat.difficulties.Medium}</span>
+                        <span style={{ color: tk.rose }}>H: {cat.difficulties.Hard}</span>
+                      </div>
+                    </div>
+                  );
+                }
+                // Live LeetCode data: weakest (fewest solved) first.
+                const rel = cat.solvedProblems / maxSolved;
+                const color = i < Math.ceil(weakCategories.length / 3) ? tk.rose : rel < 0.6 ? tk.amber : tk.green;
+                return (
+                  <div key={cat.tag} style={{ padding: 16, background: tk.surface, border: `1px solid ${tk.border}`, borderRadius: 10 }}>
+                    <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", marginBottom: 12 }}>
+                      <div>
+                        <h3 style={{ fontSize: 14, fontWeight: 600, color: tk.text, margin: 0, marginBottom: 4 }}>{cat.tag}</h3>
+                        <div style={{ fontSize: 12, color: tk.text3, marginBottom: 8 }}>
+                          {i === 0 ? "Weakest area" : `#${i + 1} weakest`}
+                          {cat.level ? ` • ${cat.level.charAt(0).toUpperCase() + cat.level.slice(1)}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 24, fontWeight: 700, color }}>
+                        {cat.solvedProblems}
+                        <span style={{ fontSize: 12, fontWeight: 500, color: tk.text3 }}> solved</span>
+                      </div>
+                    </div>
+
+                    {/* Relative bar vs strongest topic */}
+                    <div style={{ height: 6, background: tk.bgAlt, borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.max(4, Math.round(rel * 100))}%`, background: color, borderRadius: 3, transition: "width 0.3s" }} />
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
       </div>
@@ -4505,6 +4589,27 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                       }}>
                         {prob.difficulty}
                       </span>
+
+                      {/* Optimal solution */}
+                      <button
+                        onClick={() => setSolving({
+                          title: prob.title,
+                          slug: prob.slug,
+                          difficulty: prob.difficulty,
+                          topicTags: prob.topicTags,
+                          url: prob.url,
+                          company: selectedCompany,
+                          autoSolution: true,
+                        })}
+                        title={`View optimal solution for ${prob.title}`}
+                        style={{
+                          fontSize: 11, fontWeight: 700, padding: "4px 12px", borderRadius: 6, flexShrink: 0,
+                          border: `1.5px solid ${tk.green}`, background: "transparent", color: tk.green,
+                          cursor: "pointer", whiteSpace: "nowrap" as const
+                        }}
+                      >
+                        Solution
+                      </button>
 
                       {/* Frequency indicator */}
                       {prob.frequency > 0 && (
@@ -4914,6 +5019,8 @@ export default function Page() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  // Last OAuth failure to surface to the user (instead of a console-only error).
+  const [oauthError, setOauthError] = useState<string | null>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const menuPanelRef = useRef<HTMLDivElement>(null);
   // Viewport anchor for the account menu (fixed positioning — immune to ancestor layout quirks).
@@ -5232,7 +5339,16 @@ export default function Page() {
   // Fallback OAuth completion: the callback pages normally finish sign-in
   // themselves now, but a refresh mid-exchange (or an older tab) can leave a
   // pending payload behind — finish it here so nobody gets stuck logged out.
+  // Non-retryable failures (misconfigured backend, consumed single-use code)
+  // are surfaced in the login window instead of failing silently.
   useEffect(() => {
+    // Surface a failure stashed by the callback page (it already decided this
+    // payload must not be retried — show it instead of looping).
+    const stashedError = claimOAuthError();
+    if (stashedError) {
+      setOauthError(stashedError);
+      setAuthModal("login");
+    }
     // Guard: only process once per mount (prevents StrictMode double-fire and
     // any re-render from causing a second exchange attempt).
     if ((window as any)._oauthProcessed) return;
@@ -5273,8 +5389,14 @@ export default function Page() {
 
         const normalized = coerceAuthUser(exchangeResult.user, { provider });
         await handleLogin(normalized);
+        setOauthError(null);
       } catch (err) {
-        console.error("OAuth completion failed:", err instanceof Error ? err.message : 'unknown error');
+        const message = err instanceof Error ? err.message : 'unknown error';
+        console.error("OAuth completion failed:", message);
+        // Don't leave the user staring at a mandatory login window with no
+        // explanation — show the failure and reopen sign-in.
+        setOauthError(message);
+        setAuthModal("login");
       }
     };
 
@@ -5818,7 +5940,14 @@ export default function Page() {
 
       <div suppressHydrationWarning style={{ minHeight: "100vh", background: tk.bg, color: tk.text, fontFamily: "'Geist', system-ui, sans-serif", transition: "background 0.2s, color 0.2s" }}>
 
-        {authModal && <AuthModal mode={authModal} tk={tk} onAuth={handleLogin} onSwitchMode={() => setAuthModal(m => m === "login" ? "signup" : "login")} />}
+        {oauthError && (
+          <div role="alert" style={{ position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 1100, maxWidth: 520, width: "calc(100% - 32px)", padding: "10px 14px", borderRadius: 9, background: tk.roseLight, border: `1px solid ${tk.roseBorder}`, color: tk.rose, fontSize: 12, fontWeight: 500, display: "flex", alignItems: "flex-start", gap: 10 }}>
+            <span style={{ flex: 1, lineHeight: 1.5 }}>Sign-in failed: {oauthError}</span>
+            <button onClick={() => setOauthError(null)} aria-label="Dismiss sign-in error" style={{ background: "none", border: "none", cursor: "pointer", color: tk.rose, fontSize: 14, lineHeight: 1, padding: 0 }}>✕</button>
+          </div>
+        )}
+
+        {authModal && <AuthModal mode={authModal} tk={tk} onAuth={(u) => { setOauthError(null); handleLogin(u); }} onSwitchMode={() => setAuthModal(m => m === "login" ? "signup" : "login")} />}
 
         {/* NAVBAR */}
         <nav suppressHydrationWarning style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 200, background: "transparent", padding: isMobile ? "10px 12px 0" : isTablet ? "14px 16px 0" : "14px 96px 0 16px" }}>

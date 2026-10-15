@@ -222,9 +222,11 @@ export async function exchangeCodeForToken(
         : Array.isArray(body?.detail)
           ? body.detail.map((d: any) => d?.msg || JSON.stringify(d)).join(", ")
           : undefined;
-    throw new Error(
-      body?.error || detail || body?.message || `OAuth exchange failed (${res.status})`
-    );
+    const message =
+      body?.error || detail || body?.message || `OAuth exchange failed (${res.status})`;
+    const err = new Error(message) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
 
   const data = await res.json();
@@ -337,6 +339,51 @@ export function stashPendingOAuth(pending: PendingOAuth): void {
     localStorage.setItem(PENDING_OAUTH_LOCAL_KEY, payload);
   } catch {
     // ignore
+  }
+}
+
+/**
+ * Single-use authorization codes must NOT be retried after the backend has
+ * already seen them (400 invalid_grant / exchange failed) or when the
+ * backend is misconfigured (500 "not configured"). Retrying just burns the
+ * code a second time and surfaces a confusing second error on the home
+ * page. Only network-level failures (fetch threw before a response) and
+ * 502/503/504 are worth one retry via the stashed payload.
+ */
+export function isRetryableOAuthError(err: unknown): boolean {
+  const status = (err as { status?: unknown })?.status;
+  if (typeof status === "number") {
+    return status === 502 || status === 503 || status === 504;
+  }
+  // No HTTP status → fetch threw (offline, CORS, backend asleep). Retry once.
+  if (err instanceof TypeError) return true;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  // Backend explicitly wraps unexpected failures with this prefix without a
+  // status — treat as non-retryable (the code was already consumed).
+  if (/exchange failed|not configured|invalid_grant|redirect_uri/i.test(msg)) return false;
+  return false;
+}
+
+export const OAUTH_ERROR_KEY = "deviq_oauth_error";
+
+/** Persist a user-visible OAuth failure so the home page can show it. */
+export function stashOAuthError(message: string): void {
+  try {
+    sessionStorage.setItem(OAUTH_ERROR_KEY, message);
+  } catch {
+    // ignore
+  }
+}
+
+/** Atomically claim a stored OAuth error message (read + clear). */
+export function claimOAuthError(): string | null {
+  try {
+    const raw = sessionStorage.getItem(OAUTH_ERROR_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(OAUTH_ERROR_KEY);
+    return raw;
+  } catch {
+    return null;
   }
 }
 

@@ -4,6 +4,8 @@ import { Suspense, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   exchangeCodeForToken,
+  isRetryableOAuthError,
+  stashOAuthError,
   stashPendingOAuth,
   storeAuthSession,
   verifyStateForProvider,
@@ -44,8 +46,14 @@ function GoogleCallbackContent() {
       })
       .catch((err) => {
         console.error("Google sign-in failed:", err);
-        // Re-stash so the home page can retry once (transient failures).
-        stashPendingOAuth(pending);
+        // Single-use codes must not be retried after the backend already
+        // consumed them (or is misconfigured). Only re-stash for transient
+        // network/5xx errors; otherwise surface the message on the home page.
+        if (isRetryableOAuthError(err)) {
+          stashPendingOAuth(pending);
+        } else {
+          stashOAuthError(err instanceof Error ? err.message : "Google sign-in failed");
+        }
         window.location.replace("/");
       });
   }, [searchParams]);
