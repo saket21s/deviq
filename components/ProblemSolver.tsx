@@ -828,7 +828,7 @@ export default function ProblemSolver({
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 460px), 1fr))", gap: 16, alignItems: "start" }}>
         {/* Left: problem statement */}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ border: `1px solid ${tk.border}`, borderRadius: 12, overflow: "hidden" }}>

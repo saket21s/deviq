@@ -4174,14 +4174,14 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
 
       {/* Input Section */}
       <div style={{ maxWidth: 600, marginBottom: 32 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" as const }}>
           <input
             type="text"
             value={leetcodeUsername}
             onChange={(e) => setLeetcodeUsername(e.target.value)}
             placeholder="Enter your LeetCode username..."
             style={{
-              flex: 1,
+              flex: "1 1 220px",
               padding: "12px 16px",
               border: `1px solid ${tk.border}`,
               borderRadius: 8,
@@ -4548,7 +4548,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                   return (
                     <div key={prob.slug} style={{
                       padding: "12px 20px", borderBottom: i < filteredProblems.length - 1 ? `1px solid ${tk.border}` : "none",
-                      display: "flex", alignItems: "center", gap: 12, background: isSolved ? (tk.greenLight) : "transparent",
+                      display: "flex", alignItems: "center", gap: 12, rowGap: 8, flexWrap: "wrap" as const, background: isSolved ? (tk.greenLight) : "transparent",
                       transition: "background 0.15s"
                     }}>
                       {/* Solved checkbox */}
@@ -4561,7 +4561,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                       </button>
 
                       {/* Problem info */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ flex: "1 1 220px", minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
                           <span style={{ fontSize: 12, color: tk.text3, fontFamily: "monospace", flexShrink: 0 }}>#{prob.id}</span>
                           <a href={prob.url} target="_blank" rel="noopener noreferrer" style={{
@@ -4580,6 +4580,8 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                         </div>
                       </div>
 
+                      {/* Row meta: badge, solution, frequency */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const, marginLeft: "auto" }}>
                       {/* Difficulty badge */}
                       <span style={{
                         fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, flexShrink: 0,
@@ -4619,6 +4621,7 @@ function PracticePage({ user, profile, tk, isMobile, onProfileSave, dark }: {
                           </div>
                         </div>
                       )}
+                      </div>
                     </div>
                   );
                 })
